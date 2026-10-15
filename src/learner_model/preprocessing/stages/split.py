@@ -1,18 +1,20 @@
 """
-Stage "split": decide once which students are in train / val / test.
+Stage "split": decide once which students are in train / val / test,
+starting from the raw MIAAM interactions.
 
-Version "split_pykt" copies pyKT's split, so results stay comparable with DKT:
-  - test  = students in pyKT's test_sequences.csv
-  - val   = students with fold == --val-fold in train_valid_sequences.csv
-  - train = all other students in train_valid_sequences.csv
+  - The unit is a student (default) or a classroom (--group-col classroom_id).
+    With classrooms, all students of a class go to the same set.
+  - Units are sorted, then shuffled with a fixed seed: the result does not
+    depend on the row order in the file.
+  - Fractions are fractions of units (students or classrooms), not of rows.
 
 Usage (from the repo root, after committing your code):
   uv run python -m learner_model.preprocessing.stages.split \
-      --pykt-dir ../evaluation-miaam/pykt-toolkit/data/miaamv1
+      --interactions ../MIAAM/data/maths_data_filtered.parquet
 
 Output (a new folder, never modified later):
-  datasets/split_pykt__<date>__<commit6>/
-    split.json
+  datasets/split_students__<date>__<commit6>/
+    split.json         {"train": [user_id, ...], "val": [...], "test": [...]}
     manifest.json      (written last)
 """
 
@@ -20,72 +22,82 @@ import argparse
 import json
 from pathlib import Path
 
-import pandas as pd
+import numpy as np
+import polars as pl
 
 from learner_model.common.datasets import DatasetWriter
 
-
-def read_ids(path, need_fold):
-    """Read only the uid (and fold) columns of a pyKT sequences file."""
-    needed = {"uid", "fold"} if need_fold else {"uid"}
-    header = pd.read_csv(path, nrows=0).columns
-    missing = needed - set(header)
-    if missing:
-        raise ValueError(f"{path}: missing columns {missing}. Columns found: {list(header)}")
-    # pyKT can cut one long student sequence into several rows: same uid, several rows.
-    return pd.read_csv(path, usecols=list(needed), dtype={"uid": str})
+SETS = ("train", "val", "test")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--pykt-dir", required=True, help="pyKT folder with train_valid_sequences.csv and test_sequences.csv")
-    p.add_argument("--val-fold", type=int, default=0, help="which pyKT fold becomes the validation set")
+    p.add_argument("--interactions", required=True, help="maths_data_filtered.parquet")
+    p.add_argument("--group-col", default="user_id", choices=["user_id", "classroom_id"])
+    p.add_argument("--val-frac", type=float, default=0.1)
+    p.add_argument("--test-frac", type=float, default=0.2)
+    p.add_argument("--seed", type=int, default=0)
     p.add_argument("--root", default="datasets", help="where dataset folders are created")
     p.add_argument("--allow-dirty", action="store_true", help="allow uncommitted changes (quick tests only)")
     args = p.parse_args()
 
-    pykt_dir = Path(args.pykt_dir).resolve()
-    tv_path = pykt_dir / "train_valid_sequences.csv"
-    test_path = pykt_dir / "test_sequences.csv"
+    if not 0 < args.val_frac + args.test_frac < 1:
+        raise ValueError("val-frac + test-frac must be between 0 and 1")
 
-    # Only settings that change the RESULT go in the config (not --root, not --allow-dirty).
-    config = {"source": "pykt", "pykt_dir": str(pykt_dir), "val_fold": args.val_fold}
-    out = DatasetWriter("split_pykt", config, root=args.root, allow_dirty=args.allow_dirty)
+    path = Path(args.interactions).resolve()
+    # Only settings that change the RESULT go in the config.
+    config = {"interactions": str(path), "group_col": args.group_col,
+              "val_frac": args.val_frac, "test_frac": args.test_frac, "seed": args.seed}
+    out = DatasetWriter("split_students", config, root=args.root, allow_dirty=args.allow_dirty)
     if out.reuse:
         return
 
-    tv = read_ids(tv_path, need_fold=True)
-    test_df = read_ids(test_path, need_fold=False)
+    cols = list(dict.fromkeys(["user_id", args.group_col, "data_correct", "source"]))
+    it = pl.read_parquet(path, columns=cols)
 
-    # Check 1: each student must be in only one fold.
-    folds_per_student = tv.groupby("uid")["fold"].nunique()
-    bad = folds_per_student[folds_per_student > 1]
-    if len(bad):
-        raise ValueError(f"{len(bad)} students are in more than one fold, e.g. {list(bad.index[:5])}")
-    if args.val_fold not in set(tv["fold"]):
-        raise ValueError(f"fold {args.val_fold} not found. Folds: {sorted(set(tv['fold']))}")
+    # With classrooms: each student must belong to exactly one class.
+    if args.group_col != "user_id":
+        n_groups = it.group_by("user_id").agg(pl.col(args.group_col).n_unique())
+        bad = n_groups.filter(pl.col(args.group_col) > 1)
+        if bad.height:
+            raise ValueError(f"{bad.height} students are in more than one {args.group_col}. "
+                             f"Splitting by {args.group_col} would put them in two sets.")
 
-    val = set(tv.loc[tv["fold"] == args.val_fold, "uid"])
-    train = set(tv["uid"]) - val
-    test = set(test_df["uid"])
+    # Shuffle the units with a fixed seed.
+    units = np.array(sorted(it[args.group_col].drop_nulls().unique().to_list()))
+    order = np.random.default_rng(args.seed).permutation(len(units))
+    n_test = round(args.test_frac * len(units))
+    n_val = round(args.val_frac * len(units))
+    unit_set = {}
+    for i, idx in enumerate(order):
+        unit_set[units[idx]] = "test" if i < n_test else "val" if i < n_test + n_val else "train"
 
-    # Check 2: no student in two sets.
-    for a_name, a, b_name, b in [("train", train, "val", val), ("train", train, "test", test), ("val", val, "test", test)]:
-        common = a & b
-        if common:
-            raise ValueError(f"{len(common)} students are in both {a_name} and {b_name}, e.g. {sorted(common)[:5]}")
+    it = it.with_columns(pl.col(args.group_col).replace_strict(unit_set, default=None).alias("set"))
+    if it["set"].null_count():
+        raise ValueError(f"{it['set'].null_count()} rows have no {args.group_col}")
 
-    sets = {"train": sorted(train), "val": sorted(val), "test": sorted(test)}
+    sets = {s: sorted(it.filter(pl.col("set") == s)["user_id"].unique().to_list()) for s in SETS}
     (out.path / "split.json").write_text(json.dumps(sets, indent=1))
 
-    counts = {k: len(v) for k, v in sets.items()}
-    out.finish(input_files=[tv_path, test_path], extra={"stats": counts})
+    # Stats, to check that the sets look alike.
+    stats = {}
+    for s in SETS:
+        part = it.filter(pl.col("set") == s)
+        stats[s] = {
+            "students": len(sets[s]),
+            "units": sum(v == s for v in unit_set.values()),
+            "interactions": part.height,
+            "correct_rate": round(part["data_correct"].mean(), 4),
+            "source": dict(part["source"].value_counts().iter_rows()),
+        }
+    out.finish(input_files=[path], extra={"stats": stats})
 
-    total = sum(counts.values())
+    total = sum(v["students"] for v in stats.values())
     print(f"Created {out.path}")
-    for k, n in counts.items():
-        print(f"  {k:5s}: {n:6d} students ({100 * n / total:.1f}%)")
-    print(f"  total: {total:6d} students")
+    for s, v in stats.items():
+        src = ", ".join(f"{k} {n / v['interactions']:.0%}" for k, n in sorted(v["source"].items()))
+        print(f"  {s:5s}: {v['students']:6d} students ({100 * v['students'] / total:4.1f}%) | "
+              f"{v['interactions']:8d} rows | correct {v['correct_rate']:.3f} | {src}")
 
 
 if __name__ == "__main__":
