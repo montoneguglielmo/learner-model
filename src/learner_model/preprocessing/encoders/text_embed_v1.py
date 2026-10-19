@@ -53,7 +53,7 @@ def load_model(m, revision):
         revision=revision,
         device=m.get("device", "cuda"),
         model_kwargs={"torch_dtype": getattr(torch, m["dtype"])},
-        tokenizer_kwargs={"padding_side": "left"},  # recommended for Qwen3-Embedding (last-token pooling)
+        processor_kwargs={"padding_side": "left"},  # recommended for Qwen3-Embedding (last-token pooling)
     )
     model.max_seq_length = m["max_length"]
     return model
