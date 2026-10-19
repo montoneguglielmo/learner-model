@@ -1,0 +1,22 @@
+# Encoder text_embed_v1 with Qwen3-Embedding-4B (main choice).
+# Small changes (other dim, other text settings) = a new config file.
+
+exercises: ../MIAAM/data/maths_exercises_table.parquet
+
+model:
+  name: Qwen/Qwen3-Embedding-4B
+  revision: main        # resolved to the exact commit hash at run time, saved in the manifest
+  dtype: bfloat16
+  device: cuda
+  max_length: 4096      # tokens; our longest text is about 1,000-1,500 tokens
+  batch_size: 16
+  output_dim: 1024      # keep the first 1024 of 2560 values (Matryoshka). null = keep all
+  prompt: null          # exercises are embedded as documents: no instruction
+
+text:
+  include_hierarchy: true
+  include_gameplay_type: true
+  include_correct_answer: true
+  include_feedback_incorrect: true
+  include_feedback_correct: false
+  include_pedagogical_intent: false

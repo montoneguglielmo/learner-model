@@ -1,0 +1,21 @@
+# Encoder text_embed_v1 with Qwen3-Embedding-0.6B (fast experiments).
+
+exercises: ../MIAAM/data/maths_exercises_table.parquet
+
+model:
+  name: Qwen/Qwen3-Embedding-0.6B
+  revision: main        # resolved to the exact commit hash at run time, saved in the manifest
+  dtype: bfloat16
+  device: cuda
+  max_length: 4096
+  batch_size: 32
+  output_dim: null      # the model gives 1024 values: keep all
+  prompt: null
+
+text:
+  include_hierarchy: true
+  include_gameplay_type: true
+  include_correct_answer: true
+  include_feedback_incorrect: true
+  include_feedback_correct: false
+  include_pedagogical_intent: false
