@@ -14,7 +14,9 @@ dependencies = [
     "polars>=2.0.0",
     "pyarrow>=26.0.0",
     "pyyaml>=6.0.3",
+    "scikit-learn>=1.9.1",
     "sentence-transformers>=5.7.0",
+    "tabicl>=2.2.0",
     "torch>=2.14.1",
 ]
 
