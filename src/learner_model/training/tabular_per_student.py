@@ -42,7 +42,7 @@ Output:
   runs/tabular_per_student__<date>__<commit6>/
     config.json          all settings + git commit + library versions
     predictions.parquet  one row per prediction: user_id, t, y, p_model, p_baseline, dim, ...
-    metrics.json         AUC / log-loss / accuracy, overall and by history length (written last)
+    metrics.json         AUC / log-loss / accuracy / accuracy_1 / accuracy_0, overall and by history length (written last)
 """
 
 import argparse
@@ -176,9 +176,13 @@ def score(y, p):
     from sklearn.metrics import log_loss, roc_auc_score
     y, p = np.asarray(y), np.clip(np.asarray(p, dtype=float), 1e-6, 1 - 1e-6)
     out = {"n": int(len(y)), "correct_rate": float(y.mean()) if len(y) else None}
+    hit = (p >= 0.5) == y
     if len(np.unique(y)) == 2:
         out.update(auc=float(roc_auc_score(y, p)), logloss=float(log_loss(y, p)),
-                   accuracy=float(((p >= 0.5) == y).mean()))
+                   accuracy=float(hit.mean()))
+    # MIAAM paper, Table 3: accuracy on the interactions the student got right [1] / wrong [0]
+    out["accuracy_1"] = float(hit[y == 1].mean()) if (y == 1).any() else None
+    out["accuracy_0"] = float(hit[y == 0].mean()) if (y == 0).any() else None
     return out
 
 
@@ -204,13 +208,16 @@ def compute_metrics(pred):
 def print_metrics(metrics):
     def f(x):
         return "  -  " if x is None else f"{x:.3f}"
-    hdr = f"{'dim':>5} {'history':>8} {'n':>7} {'AUC model':>10} {'AUC base':>9} {'fallback':>9}"
+    hdr = (f"{'dim':>5} {'history':>8} {'n':>7} {'AUC model':>10} {'AUC base':>9} "
+           f"{'acc1 model':>11} {'acc0 model':>11} {'acc1 base':>10} {'acc0 base':>10} {'fallback':>9}")
     print("\n" + hdr + "\n" + "-" * len(hdr))
     for dim, r in metrics.items():
         rows = [("all", r["model"], r["baseline"], r["fallback_rate"])]
         rows += [(k, v["model"], v["baseline"], v["fallback_rate"]) for k, v in r["by_history"].items()]
         for name, m, b, fb in rows:
-            print(f"{dim:>5} {name:>8} {m['n']:>7} {f(m.get('auc')):>10} {f(b.get('auc')):>9} {f(fb):>9}")
+            print(f"{dim:>5} {name:>8} {m['n']:>7} {f(m.get('auc')):>10} {f(b.get('auc')):>9} "
+                  f"{f(m.get('accuracy_1')):>11} {f(m.get('accuracy_0')):>11} "
+                  f"{f(b.get('accuracy_1')):>10} {f(b.get('accuracy_0')):>10} {f(fb):>9}")
         print()
 
 
@@ -343,14 +350,22 @@ def main():
 
     if wb:
         table = [[int(dim), hist, v["model"]["n"], v["model"].get("auc"), v["baseline"].get("auc"),
+                  v["model"].get("accuracy_1"), v["model"].get("accuracy_0"),
+                  v["baseline"].get("accuracy_1"), v["baseline"].get("accuracy_0"),
                   v["fallback_rate"]]
                  for dim, r in metrics.items()
                  for hist, v in [("all", r)] + list(r["by_history"].items())]
         wb.log({"results": wandb.Table(columns=["dim", "history", "n", "auc_model", "auc_baseline",
-                                                "fallback_rate"], data=table)})
+                                                "acc1_model", "acc0_model", "acc1_baseline",
+                                                "acc0_baseline", "fallback_rate"], data=table)})
         for dim, r in metrics.items():
             wb.summary[f"auc_model/dim{dim}"] = r["model"].get("auc")
-        wb.summary["auc_baseline"] = next(iter(metrics.values()))["baseline"].get("auc")
+            wb.summary[f"acc1_model/dim{dim}"] = r["model"].get("accuracy_1")
+            wb.summary[f"acc0_model/dim{dim}"] = r["model"].get("accuracy_0")
+        base = next(iter(metrics.values()))["baseline"]
+        wb.summary["auc_baseline"] = base.get("auc")
+        wb.summary["acc1_baseline"] = base.get("accuracy_1")
+        wb.summary["acc0_baseline"] = base.get("accuracy_0")
         wb.finish()
 
 
