@@ -15,13 +15,14 @@ model:
   prompt: null
 
 text:
-  # Kept as their own output columns (to join with other tables), not in the text.
-  keep_columns: [exercise_id]
+  # ALL the output columns, copied as they are (ids to join with other tables), not in the text.
+  # Must include user_id and created_at (the output is sorted by them).
+  keep_columns: [user_id, created_at, exercise_id, session_id, classroom_id, module_id, playlist_or_module_id]
   # What a model must predict: never in the text.
   target_columns: [data_correct, data_answer]
   # The ONLY columns written into the text, in this order. Any other column is not used.
-  # Left out on purpose: raw ids (classroom_id, playlist_or_module_id, session_id, module_id):
-  # UUIDs carry little meaning as text, and module_name already names the module.
+  # Raw ids (UUIDs) are kept columns, not text: they carry little meaning as text,
+  # and module_name already names the module.
   # Run scripts/preview_event_texts.py: it prints the columns that are "not used".
   text_columns: [module_name, work_mode, source, attempt_index, data_duration]
   include_nulls: false

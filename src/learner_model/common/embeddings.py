@@ -19,7 +19,7 @@ def load_embeddings(dataset_id, root="datasets"):
     return df["exercise_id"].to_list(), df["embedding"].to_numpy()
 
 def load_event_embeddings(dataset_id, root="datasets"):
-    """Return a polars DataFrame: event_id, user_id, created_at, <keep columns, e.g. exercise_id>, embedding.
+    """Return a polars DataFrame: event_id, <keep columns: user_id, created_at, ...>, embedding.
 
     One row per event, sorted by user_id, created_at. embedding is an Array column;
     df["embedding"].to_numpy() gives a float32 (N, dim) matrix.

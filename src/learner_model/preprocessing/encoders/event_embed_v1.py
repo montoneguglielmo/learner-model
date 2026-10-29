@@ -22,9 +22,9 @@ Quick test on 5000 events (creates a separate dataset folder, delete it after):
 
 Output:
   datasets/event_embed_v1__<date>__<commit6>/
-    embeddings.parquet   event_id, user_id, created_at, <keep columns, e.g. exercise_id>, embedding (float32, L2-normalized),
+    embeddings.parquet   event_id, <keep columns: user_id, created_at, ...>, embedding (float32, L2-normalized),
                          sorted by user_id, created_at
-    texts.parquet        event_id, user_id, created_at, <keep columns>, text: exactly the texts that were embedded
+    texts.parquet        event_id, <keep columns>, text: exactly the texts that were embedded
     manifest.json        written last
 """
 

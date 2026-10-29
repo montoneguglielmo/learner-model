@@ -11,10 +11,10 @@ The text is one "column: value" line per text column, in the order of the config
   source: v1.0
 
 Columns:
-  - user_id, created_at and the keep columns (e.g. exercise_id): their own output columns
+  - keep columns: the output columns, copied as they are (must include user_id, created_at)
   - text columns: listed by name in the config. A column that is not listed is NOT used,
     so a new column in the data never enters the text by surprise.
-    (text_columns: null = every column that is not a key, keep or target column.)
+    (text_columns: null = every column that is not a keep or target column.)
   - target columns (e.g. data_correct, data_answer): what a model must predict.
     Never in the text: listing one as a text or keep column is an error.
   - empty values (null, NaN, ""): the line is skipped, unless include_nulls
@@ -24,13 +24,13 @@ from dataclasses import asdict, dataclass, field
 
 import polars as pl
 
-KEY = ["user_id", "created_at"]
+KEY = ["user_id", "created_at"]  # the output is sorted by these
 
 
 @dataclass
 class EventTextConfig:
     """What goes into the text. Saved in the manifest of the embedding dataset."""
-    keep_columns: list = field(default_factory=lambda: ["exercise_id"])  # own output columns, not in the text
+    keep_columns: list = field(default_factory=lambda: KEY + ["exercise_id"])  # output columns, not in the text
     text_columns: list | None = None  # None = all the other columns
     target_columns: list = field(default_factory=lambda: ["data_correct", "data_answer"])
     include_nulls: bool = False   # True: write "column: null" instead of skipping the line
@@ -48,15 +48,15 @@ def columns_in_text(columns, cfg):
     if unknown:
         raise ValueError(f"Columns {unknown} are in the config but not in the table. "
                          f"Available columns: {list(columns)}")
-    missing = [c for c in KEY if c not in columns]
+    missing = [c for c in KEY if c not in cfg.keep_columns]
     if missing:
-        raise ValueError(f"Columns {missing} are required but not in the table")
+        raise ValueError(f"keep_columns must include {missing}")
     leak = [c for c in cfg.target_columns if c in cfg.keep_columns + (cfg.text_columns or [])]
     if leak:
         raise ValueError(f"Target columns {leak} are also listed as text or keep columns")
     if cfg.text_columns is not None:
         return list(cfg.text_columns)
-    skip = set(KEY) | set(cfg.keep_columns) | set(cfg.target_columns)
+    skip = set(cfg.keep_columns) | set(cfg.target_columns)
     return [c for c in columns if c not in skip]
 
 
@@ -82,13 +82,13 @@ def build_event_texts(events: pl.DataFrame, cfg: EventTextConfig) -> pl.DataFram
     """
     One row per event, sorted by user_id, created_at, with columns:
       event_id    row number in the input table (user_id + created_at may not be unique)
-      user_id, created_at, <keep columns>, text
+      <keep columns> (user_id, created_at, ...), text
     """
     cols = columns_in_text(events.columns, cfg)
     lines = [pl.concat_str(pl.lit(f"{c}: "), _value(c, events.schema[c], cfg)) for c in cols]
     text = pl.concat_str(lines, separator="\n", ignore_nulls=True) if lines else pl.lit("")
     return (
         events.with_row_index("event_id")
-        .select("event_id", *KEY, *cfg.keep_columns, text.fill_null("").alias("text"))
+        .select("event_id", *cfg.keep_columns, text.fill_null("").alias("text"))
         .sort([*KEY, "event_id"])
     )
