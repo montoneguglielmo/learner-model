@@ -1,11 +1,14 @@
 """
-Encoder "event_embed_v1": one vector per event (one row of the interactions table),
-from a short "column: value" text.
+Encoder "event_embed_v1": TWO vectors per event (one row of the interactions table),
+each from a short "column: value" text:
+  event_embedding   from embed_event_columns (what the event is)
+  result_embedding  from embed_result_columns (what the student answered)
 
-  1. Build one text per event (event_text.py) from the text columns listed in
-     the "text" part of the config (never the target columns).
+  1. Build the two texts per event (event_text.py), with the column lists in
+     the "text" part of the config.
   2. Embed each text with a sentence-embedding model (e.g. Qwen3-Embedding).
-     Events are done in chunks; inside a chunk, identical texts are embedded once.
+     Events are done in chunks; inside a chunk, identical texts are embedded once
+     (result texts repeat a lot, so they cost little).
   3. Optionally keep only the first `output_dim` values (Matryoshka), then L2-normalize.
   4. Save the result as a dataset folder, following the dataset rules.
 
@@ -22,9 +25,11 @@ Quick test on 5000 events (creates a separate dataset folder, delete it after):
 
 Output:
   datasets/event_embed_v1__<date>__<commit6>/
-    embeddings.parquet   event_id, <keep columns: user_id, created_at, ...>, embedding (float32, L2-normalized),
+    embeddings.parquet   event_id, <keep columns: user_id, created_at, ...>,
+                         event_embedding, result_embedding (float32, L2-normalized),
                          sorted by user_id, created_at
-    texts.parquet        event_id, <keep columns>, text: exactly the texts that were embedded
+    texts.parquet        event_id, <keep columns>, event_text, result_text:
+                         exactly the texts that were embedded
     manifest.json        written last
 """
 
@@ -40,7 +45,7 @@ from tqdm import tqdm
 
 from learner_model.common.datasets import DatasetWriter
 from learner_model.common.sentence_models import gpu_name, library_versions, load_model, resolve_revision
-from learner_model.preprocessing.event_text import EventTextConfig, build_event_texts
+from learner_model.preprocessing.event_text import KINDS, EventTextConfig, build_event_texts
 
 PIPELINE = "event_embed_v1"
 
@@ -102,20 +107,23 @@ def main():
 
     # Chunks, so that all the embeddings never need to be in memory at once.
     writer = None
-    n_tokens, n_unique = [], 0
+    n_tokens = {k: [] for k in KINDS}
+    n_unique = {k: 0 for k in KINDS}
     t0 = time.time()
     bar = tqdm(total=texts.height, unit="event", desc="Embedding", smoothing=0.1)
     for start in range(0, texts.height, args.chunk_size):
         chunk = texts.slice(start, args.chunk_size)
-        uniq = chunk.select(pl.col("text").unique(maintain_order=True)).with_row_index("k")
-        docs = [prompt + t for t in uniq["text"].to_list()]
-        n_tokens.extend(len(ids) for ids in model.tokenizer(docs)["input_ids"])
-        n_unique += len(docs)
-
-        emb = embed(model, docs, m, dim)
-        k = chunk.join(uniq, on="text", how="left", maintain_order="left")["k"].to_numpy()
-        table = chunk.drop("text").with_columns(
-            embedding=pl.Series(emb[k], dtype=pl.Array(pl.Float32, dim))).to_arrow()
+        table = chunk.drop([f"{k}_text" for k in KINDS])
+        for kind in KINDS:
+            col = f"{kind}_text"
+            uniq = chunk.select(pl.col(col).unique(maintain_order=True)).with_row_index("k")
+            docs = [prompt + t for t in uniq[col].to_list()]
+            n_tokens[kind].extend(len(ids) for ids in model.tokenizer(docs)["input_ids"])
+            n_unique[kind] += len(docs)
+            emb = embed(model, docs, m, dim)
+            k = chunk.join(uniq, on=col, how="left", maintain_order="left")["k"].to_numpy()
+            table = table.with_columns(pl.Series(f"{kind}_embedding", emb[k], dtype=pl.Array(pl.Float32, dim)))
+        table = table.to_arrow()
         if writer is None:
             writer = pq.ParquetWriter(out.path / "embeddings.parquet", table.schema)
         writer.write_table(table)
@@ -127,10 +135,12 @@ def main():
     seconds = round(time.time() - t0, 1)
     texts.write_parquet(out.path / "texts.parquet")
 
-    n_tokens = np.array(n_tokens)
-    n_truncated = int((n_tokens > m["max_length"]).sum())
-    if n_truncated:
-        print(f"WARNING: {n_truncated} texts were longer than max_length={m['max_length']} tokens and were cut")
+    n_tokens = {k: np.array(v) for k, v in n_tokens.items()}
+    n_truncated = {k: int((v > m["max_length"]).sum()) for k, v in n_tokens.items()}
+    for kind, n in n_truncated.items():
+        if n:
+            print(f"WARNING: {n} {kind} texts were longer than max_length={m['max_length']} tokens and were cut")
+    token_stats = {k: {"median": int(np.median(v)), "max": int(v.max())} for k, v in n_tokens.items()}
 
     out.finish(
         input_files=[events_path],
@@ -144,8 +154,7 @@ def main():
             "stats": {
                 "n_events": texts.height,
                 "n_texts_embedded": n_unique,  # unique texts per chunk, summed
-                "tokens_median": int(np.median(n_tokens)),
-                "tokens_max": int(n_tokens.max()),
+                "tokens": token_stats,
                 "n_truncated": n_truncated,
                 "encode_seconds": seconds,
                 "gpu": gpu_name(),
@@ -154,8 +163,10 @@ def main():
         },
     )
     print(f"Created {out.path}")
-    print(f"  {texts.height} events ({n_unique} texts embedded) | dim {dim} (model gives {full_dim}) | "
-          f"tokens median {int(np.median(n_tokens))}, max {n_tokens.max()} | {seconds} s")
+    print(f"  {texts.height} events | dim {dim} (model gives {full_dim}) | {seconds} s")
+    for kind in KINDS:
+        print(f"  {kind}: {n_unique[kind]} texts embedded | tokens median {token_stats[kind]['median']}, "
+              f"max {token_stats[kind]['max']}")
 
 
 if __name__ == "__main__":

@@ -1,21 +1,24 @@
 """
-Turn each event (one row of the MIAAM interactions table) into ONE short text.
+Turn each event (one row of the MIAAM interactions table) into TWO short texts:
+  event text   what the event is (exercise context, attempt, time, ...)
+  result text  what the student answered (data_correct, data_answer)
+so a model can use the event text of the event to predict, and the result text
+only for past events.
 
 Used by the event encoder (encoders/event_embed_v1.py).
 The result has exactly one row per event, in the same order as the output
 embeddings: sorted by user_id, created_at.
 
-The text is one "column: value" line per text column, in the order of the config, e.g.
+Each text is one "column: value" line per column, in the order of the config, e.g.
   attempt_index: 2
   data_duration: 13.42
   source: v1.0
 
 Columns (every column of the table must be in one list, see columns.py):
-  - keep columns: the output columns, copied as they are (must include user_id, created_at)
-  - text columns: written into the text, in the order of the config
-  - drop columns: not used
-  - target columns (e.g. data_correct, data_answer): what a model must predict.
-    Not used, and never in the text.
+  - keep_columns: the output columns, copied as they are (must include user_id, created_at)
+  - embed_event_columns: written into the event text
+  - embed_result_columns: written into the result text (never also in the event text)
+  - drop_columns: not used
   - empty values (null, NaN, ""): the line is skipped, unless include_nulls
 """
 
@@ -32,9 +35,9 @@ KEY = ["user_id", "created_at"]  # the output is sorted by these
 class EventTextConfig:
     """What goes into the text. Saved in the manifest of the embedding dataset."""
     keep_columns: list = field(default_factory=lambda: KEY + ["exercise_id"])
-    text_columns: list = field(default_factory=list)
+    embed_event_columns: list = field(default_factory=list)
+    embed_result_columns: list = field(default_factory=lambda: ["data_correct", "data_answer"])
     drop_columns: list = field(default_factory=list)
-    target_columns: list = field(default_factory=lambda: ["data_correct", "data_answer"])
     include_nulls: bool = False   # True: write "column: null" instead of skipping the line
     float_digits: int = 3         # floats are rounded to this many decimals
     max_value_chars: int = 300    # longer values are cut (long free text would dominate)
@@ -43,11 +46,23 @@ class EventTextConfig:
         return asdict(self)
 
 
-def columns_in_text(columns, cfg):
-    """The columns that go into the text. Fails if the config lists do not match the table."""
-    check_columns(columns, cfg.keep_columns, cfg.text_columns, cfg.drop_columns,
-                  target=cfg.target_columns, required_keep=KEY)
-    return list(cfg.text_columns)
+KINDS = ("event", "result")  # one text and one embedding of each kind per event
+
+
+def text_columns(columns, cfg):
+    """{"event": [...], "result": [...]}. Fails if the config lists do not match the table."""
+    both = [c for c in cfg.embed_result_columns if c in cfg.embed_event_columns]
+    if both:
+        raise ValueError(f"Columns {both} are in both embed_event_columns and embed_result_columns")
+    check_columns(columns, cfg.keep_columns, cfg.embed_event_columns + cfg.embed_result_columns,
+                  cfg.drop_columns, required_keep=KEY)
+    return {"event": list(cfg.embed_event_columns), "result": list(cfg.embed_result_columns)}
+
+
+def _text(cols, schema, cfg):
+    lines = [pl.concat_str(pl.lit(f"{c}: "), _value(c, schema[c], cfg)) for c in cols]
+    text = pl.concat_str(lines, separator="\n", ignore_nulls=True) if lines else pl.lit("")
+    return text.fill_null("")
 
 
 def _value(name, dtype, cfg):
@@ -57,6 +72,8 @@ def _value(name, dtype, cfg):
         s = pl.when(c.is_nan()).then(None).otherwise(c.round(cfg.float_digits)).cast(pl.String)
     elif isinstance(dtype, pl.List | pl.Array):
         s = c.cast(pl.List(dtype.inner)).list.eval(pl.element().cast(pl.String)).list.join(", ")
+    elif isinstance(dtype, pl.Datetime):
+        s = c.dt.to_string("%Y-%m-%d %H:%M:%S")  # to the second: microseconds only add noise
     elif isinstance(dtype, pl.Struct):
         s = c.struct.json_encode()
     else:  # strings, categoricals, integers, booleans, dates, ...
@@ -72,13 +89,12 @@ def build_event_texts(events: pl.DataFrame, cfg: EventTextConfig) -> pl.DataFram
     """
     One row per event, sorted by user_id, created_at, with columns:
       event_id    row number in the input table (user_id + created_at may not be unique)
-      <keep columns> (user_id, created_at, ...), text
+      <keep columns> (user_id, created_at, ...), event_text, result_text
     """
-    cols = columns_in_text(events.columns, cfg)
-    lines = [pl.concat_str(pl.lit(f"{c}: "), _value(c, events.schema[c], cfg)) for c in cols]
-    text = pl.concat_str(lines, separator="\n", ignore_nulls=True) if lines else pl.lit("")
+    cols = text_columns(events.columns, cfg)
     return (
         events.with_row_index("event_id")
-        .select("event_id", *cfg.keep_columns, text.fill_null("").alias("text"))
+        .select("event_id", *cfg.keep_columns,
+                *[_text(cols[k], events.schema, cfg).alias(f"{k}_text") for k in KINDS])
         .sort([*KEY, "event_id"])
     )
