@@ -3,12 +3,12 @@ Build the exercise texts and print some of them, to check them by eye
 before spending GPU time. Only reads and prints (or writes to --out).
 
 Usage (from the repo root):
-  uv run python scripts/preview_texts.py ../MIAAM/data/maths_exercises_table.parquet
-  uv run python scripts/preview_texts.py <file> --n 2                 # 2 examples per gameplay_type
-  uv run python scripts/preview_texts.py <file> --type GRADUATED_RULER --n 5
-  uv run python scripts/preview_texts.py <file> --id b266c5b4-57a5-4384-99b2-cdc4f543e522
-  uv run python scripts/preview_texts.py <file> --no-hierarchy        # try other settings
-  uv run python scripts/preview_texts.py <file> --out /tmp/texts.txt  # all texts in one file
+  uv run python scripts/preview_exercise_texts.py ../MIAAM/data/maths_exercises_table.parquet
+  uv run python scripts/preview_exercise_texts.py <file> --n 2                 # 2 examples per gameplay_type
+  uv run python scripts/preview_exercise_texts.py <file> --type GRADUATED_RULER --n 5
+  uv run python scripts/preview_exercise_texts.py <file> --id b266c5b4-57a5-4384-99b2-cdc4f543e522
+  uv run python scripts/preview_exercise_texts.py <file> --no-hierarchy        # try other settings
+  uv run python scripts/preview_exercise_texts.py <file> --out /tmp/texts.txt  # all texts in one file
 """
 
 import argparse

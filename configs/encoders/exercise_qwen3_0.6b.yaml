@@ -1,4 +1,4 @@
-# Encoder text_embed_v1 with Qwen3-Embedding-0.6B (fast experiments).
+# Encoder exercise_embed_v1 with Qwen3-Embedding-0.6B (fast experiments).
 
 exercises: ../MIAAM/data/maths_exercises_table.parquet
 

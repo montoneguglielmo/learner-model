@@ -56,7 +56,7 @@ import numpy as np
 import polars as pl
 
 from learner_model.common.datasets import git_info
-from learner_model.common.embeddings import load_embeddings
+from learner_model.common.embeddings import load_exercise_embeddings
 from learner_model.common.splits import load_split
 
 PIPELINE = "tabular_per_student"
@@ -274,7 +274,7 @@ def main():
     df, n_dups = load_interactions(args.interactions, students, dedup=not args.no_dedup)
     print(f"{args.set} students: {len(students)} | rows: {df.height} | duplicates removed: {n_dups}")
 
-    ex_ids, E = load_embeddings(args.embeddings_id, args.datasets_root)
+    ex_ids, E = load_exercise_embeddings(args.embeddings_id, args.datasets_root)
     if max(args.dims) > E.shape[1]:
         raise SystemExit(f"dim {max(args.dims)} > embedding size {E.shape[1]}")
     ex_index = {e: i for i, e in enumerate(ex_ids)}

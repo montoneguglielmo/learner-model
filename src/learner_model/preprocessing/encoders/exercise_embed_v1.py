@@ -1,5 +1,5 @@
 """
-Encoder "text_embed_v1": one vector per exercise, from its text.
+Encoder "exercise_embed_v1": one vector per exercise, from its text.
 
   1. Build one clean text per exercise (exercise_text.py), with the settings
      in the "text" part of the config.
@@ -9,22 +9,21 @@ Encoder "text_embed_v1": one vector per exercise, from its text.
   4. Save the result as a dataset folder, following the dataset rules.
 
 Usage (from the repo root, after committing your code):
-  uv run python -m learner_model.preprocessing.encoders.text_embed_v1 \
-      --config configs/encoders/text_qwen3_4b.yaml
+  uv run python -m learner_model.preprocessing.encoders.exercise_embed_v1 \
+      --config configs/encoders/exercise_qwen3_4b.yaml
 
 Quick test on 50 exercises (creates a separate dataset folder, delete it after):
-  uv run python -m learner_model.preprocessing.encoders.text_embed_v1 \
-      --config configs/encoders/text_qwen3_0.6b.yaml --limit 50 --allow-dirty
+  uv run python -m learner_model.preprocessing.encoders.exercise_embed_v1 \
+      --config configs/encoders/exercise_qwen3_0.6b.yaml --limit 50 --allow-dirty
 
 Output:
-  datasets/text_embed_v1__<date>__<commit6>/
+  datasets/exercise_embed_v1__<date>__<commit6>/
     embeddings.parquet   exercise_id, embedding (float32, L2-normalized)
     texts.parquet        exactly the texts that were embedded (+ source, gameplay_type, parse_status)
     manifest.json        written last
 """
 
 import argparse
-import importlib.metadata as md
 import time
 from pathlib import Path
 
@@ -33,53 +32,15 @@ import polars as pl
 import yaml
 
 from learner_model.common.datasets import DatasetWriter
+from learner_model.common.sentence_models import gpu_name, library_versions, load_model, resolve_revision
 from learner_model.preprocessing.exercise_text import TextConfig, build_texts
 
-PIPELINE = "text_embed_v1"
-
-
-def resolve_revision(name, revision):
-    """'main' changes over time: ask Hugging Face for the exact commit hash."""
-    from huggingface_hub import HfApi
-    return HfApi().model_info(name, revision=revision).sha
-
-
-def load_model(m, revision):
-    import torch
-    from sentence_transformers import SentenceTransformer
-
-    model = SentenceTransformer(
-        m["name"],
-        revision=revision,
-        device=m.get("device", "cuda"),
-        model_kwargs={"torch_dtype": getattr(torch, m["dtype"])},
-        processor_kwargs={"padding_side": "left"},  # recommended for Qwen3-Embedding (last-token pooling)
-    )
-    model.max_seq_length = m["max_length"]
-    return model
-
-
-def gpu_name():
-    try:
-        import torch
-        return torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
-    except Exception:
-        return None
-
-
-def library_versions():
-    out = {}
-    for lib in ["torch", "transformers", "sentence-transformers", "huggingface-hub", "polars", "numpy"]:
-        try:
-            out[lib] = md.version(lib)
-        except md.PackageNotFoundError:
-            out[lib] = None
-    return out
+PIPELINE = "exercise_embed_v1"
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", required=True, help="YAML file, e.g. configs/encoders/text_qwen3_4b.yaml")
+    p.add_argument("--config", required=True, help="YAML file, e.g. configs/encoders/exercise_qwen3_4b.yaml")
     p.add_argument("--limit", type=int, default=None, help="only the first N exercises (quick tests)")
     p.add_argument("--root", default="datasets", help="where dataset folders are created")
     p.add_argument("--allow-dirty", action="store_true", help="allow uncommitted changes (quick tests only)")

@@ -38,8 +38,7 @@ import pyarrow.parquet as pq
 import yaml
 
 from learner_model.common.datasets import DatasetWriter
-from learner_model.preprocessing.encoders.text_embed_v1 import (gpu_name, library_versions, load_model,
-                                                                resolve_revision)
+from learner_model.common.sentence_models import gpu_name, library_versions, load_model, resolve_revision
 from learner_model.preprocessing.event_text import EventTextConfig, build_event_texts
 
 PIPELINE = "event_embed_v1"
