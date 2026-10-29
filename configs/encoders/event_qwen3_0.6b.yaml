@@ -22,7 +22,7 @@ text:
   # user_id and created_at (the output is sorted by them).
   keep_columns: [user_id, created_at, exercise_id, session_id, classroom_id, module_id, playlist_or_module_id]
   # Written into the text, in this order.
-  text_columns: [module_name, work_mode, source, attempt_index, data_duration]
+  text_columns: [module_name, work_mode, source, attempt_index, data_duration, created_at]
   # Not used.
   drop_columns: []
   # What a model must predict: not used, and never in the text.
