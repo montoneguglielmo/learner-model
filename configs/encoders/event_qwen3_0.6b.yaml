@@ -15,16 +15,19 @@ model:
   prompt: null
 
 text:
-  # ALL the output columns, copied as they are (ids to join with other tables), not in the text.
-  # Must include user_id and created_at (the output is sorted by them).
+  # Every column of the table must be in one of these lists (otherwise the run stops
+  # and names the missing ones). scripts/preview_event_texts.py checks this without a GPU.
+
+  # Copied as they are into the output (ids to join with other tables). Must include
+  # user_id and created_at (the output is sorted by them).
   keep_columns: [user_id, created_at, exercise_id, session_id, classroom_id, module_id, playlist_or_module_id]
-  # What a model must predict: never in the text.
-  target_columns: [data_correct, data_answer]
-  # The ONLY columns written into the text, in this order. Any other column is not used.
-  # Raw ids (UUIDs) are kept columns, not text: they carry little meaning as text,
-  # and module_name already names the module.
-  # Run scripts/preview_event_texts.py: it prints the columns that are "not used".
+  # Written into the text, in this order.
   text_columns: [module_name, work_mode, source, attempt_index, data_duration]
+  # Not used.
+  drop_columns: []
+  # What a model must predict: not used, and never in the text.
+  target_columns: [data_correct, data_answer]
+
   include_nulls: false
   float_digits: 3
   max_value_chars: 300

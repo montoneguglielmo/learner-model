@@ -10,13 +10,12 @@ The text is one "column: value" line per text column, in the order of the config
   data_duration: 13.42
   source: v1.0
 
-Columns:
+Columns (every column of the table must be in one list, see columns.py):
   - keep columns: the output columns, copied as they are (must include user_id, created_at)
-  - text columns: listed by name in the config. A column that is not listed is NOT used,
-    so a new column in the data never enters the text by surprise.
-    (text_columns: null = every column that is not a keep or target column.)
+  - text columns: written into the text, in the order of the config
+  - drop columns: not used
   - target columns (e.g. data_correct, data_answer): what a model must predict.
-    Never in the text: listing one as a text or keep column is an error.
+    Not used, and never in the text.
   - empty values (null, NaN, ""): the line is skipped, unless include_nulls
 """
 
@@ -24,14 +23,17 @@ from dataclasses import asdict, dataclass, field
 
 import polars as pl
 
+from learner_model.preprocessing.columns import check_columns
+
 KEY = ["user_id", "created_at"]  # the output is sorted by these
 
 
 @dataclass
 class EventTextConfig:
     """What goes into the text. Saved in the manifest of the embedding dataset."""
-    keep_columns: list = field(default_factory=lambda: KEY + ["exercise_id"])  # output columns, not in the text
-    text_columns: list | None = None  # None = all the other columns
+    keep_columns: list = field(default_factory=lambda: KEY + ["exercise_id"])
+    text_columns: list = field(default_factory=list)
+    drop_columns: list = field(default_factory=list)
     target_columns: list = field(default_factory=lambda: ["data_correct", "data_answer"])
     include_nulls: bool = False   # True: write "column: null" instead of skipping the line
     float_digits: int = 3         # floats are rounded to this many decimals
@@ -42,22 +44,10 @@ class EventTextConfig:
 
 
 def columns_in_text(columns, cfg):
-    """The columns that go into the text. Fails on unknown names and on targets."""
-    listed = cfg.keep_columns + cfg.target_columns + (cfg.text_columns or [])
-    unknown = [c for c in dict.fromkeys(listed) if c not in columns]
-    if unknown:
-        raise ValueError(f"Columns {unknown} are in the config but not in the table. "
-                         f"Available columns: {list(columns)}")
-    missing = [c for c in KEY if c not in cfg.keep_columns]
-    if missing:
-        raise ValueError(f"keep_columns must include {missing}")
-    leak = [c for c in cfg.target_columns if c in cfg.keep_columns + (cfg.text_columns or [])]
-    if leak:
-        raise ValueError(f"Target columns {leak} are also listed as text or keep columns")
-    if cfg.text_columns is not None:
-        return list(cfg.text_columns)
-    skip = set(cfg.keep_columns) | set(cfg.target_columns)
-    return [c for c in columns if c not in skip]
+    """The columns that go into the text. Fails if the config lists do not match the table."""
+    check_columns(columns, cfg.keep_columns, cfg.text_columns, cfg.drop_columns,
+                  target=cfg.target_columns, required_keep=KEY)
+    return list(cfg.text_columns)
 
 
 def _value(name, dtype, cfg):

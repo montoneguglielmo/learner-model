@@ -1,8 +1,15 @@
 """
 Turn each exercise of the MIAAM exercise table into ONE clean text.
 
-Used by the text encoders (and later by encoders that combine image + text).
+Used by the exercise encoder (and later by encoders that combine image + text).
 The result has exactly one row per exercise_id.
+
+Columns (every column of the table must be in one list, see columns.py):
+  - keep columns: copied into the output (must include exercise_id)
+  - text columns: written into the text, in the order of the config.
+    "content" is parsed (see below); any other column becomes "<label> : <value>",
+    with a French label for the known columns (LABELS) and the column name otherwise.
+  - drop columns: not used
 
 What it handles:
   - two content structures: flat (instruction, question, ...) and
@@ -30,19 +37,21 @@ import ast
 import html
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import polars as pl
 
-HIERARCHY = [  # (column, label)
-    ("module_name", "Module"),
-    ("objective_name", "Objectif"),
-    ("activity_name", "Activité"),
-]
-INTENTS = [
-    ("objective_pedagogical_intent", "Intention pédagogique (objectif)"),
-    ("activity_pedagogical_intent", "Intention pédagogique (activité)"),
-]
+from learner_model.preprocessing.columns import check_columns
+
+LABELS = {
+    "module_name": "Module",
+    "objective_name": "Objectif",
+    "activity_name": "Activité",
+    "objective_pedagogical_intent": "Intention pédagogique (objectif)",
+    "activity_pedagogical_intent": "Intention pédagogique (activité)",
+    "gameplay_type": "Type d'exercice",
+}
+CONTENT = "content"  # the column with the exercise itself (JSON)
 TRIVIAL_FEEDBACK = {"bravo !", "bravo!", "bravo", "bravo !!"}
 # Generic "wrong answer" messages: they say nothing about the exercise.
 # Removed when they are the whole feedback, or cut when they start it ("Dommage. N'oublie pas...").
@@ -54,12 +63,15 @@ LATEX_RE = re.compile(r"\$([^$]+)\$")
 @dataclass
 class TextConfig:
     """What goes into the text. Saved in the manifest of the embedding dataset."""
-    include_hierarchy: bool = True           # module, objective, activity names
-    include_gameplay_type: bool = True
+    keep_columns: list = field(default_factory=lambda: ["exercise_id", "source", "gameplay_type"])
+    text_columns: list = field(default_factory=lambda: [
+        "module_name", "objective_name", "activity_name", "gameplay_type", CONTENT])
+    drop_columns: list = field(default_factory=lambda: [
+        "objective_pedagogical_intent", "activity_pedagogical_intent"])
+    # What is taken from the content (the exercise itself):
     include_correct_answer: bool = True
     include_feedback_incorrect: bool = True  # often explains the skill being tested
     include_feedback_correct: bool = False   # mostly "Bravo !"; when True, trivial ones are skipped
-    include_pedagogical_intent: bool = False
 
     def to_dict(self):
         return asdict(self)
@@ -199,48 +211,44 @@ def content_lines(obj, cfg):
 def build_texts(exercises: pl.DataFrame, cfg: TextConfig) -> pl.DataFrame:
     """
     One row per exercise_id, with columns:
-      exercise_id, source, gameplay_type, parse_status, text
+      <keep columns> (exercise_id, ...), parse_status, text
+    An exercise listed several times keeps the first value of each keep column,
+    and all the distinct values of each text column, joined with " ; ".
+    parse_status: 'json', 'python', 'failed', or None when content is not a text column.
     """
-    name_cols = [c for c, _ in HIERARCHY + INTENTS]
+    check_columns(exercises.columns, cfg.keep_columns, cfg.text_columns, cfg.drop_columns,
+                  required_keep=["exercise_id"])
+    value_cols = [c for c in cfg.text_columns if c != CONTENT]
     grouped = (
         exercises.group_by("exercise_id", maintain_order=True)
         .agg(
-            pl.col("content").unique(maintain_order=True),
-            pl.col("source").first(),
-            pl.col("gameplay_type").first(),
-            *[pl.col(c).drop_nulls().unique(maintain_order=True) for c in name_cols],
+            *[pl.col(c).first() for c in cfg.keep_columns if c != "exercise_id"],
+            *([pl.col(CONTENT).unique(maintain_order=True).alias("_content")]
+              if CONTENT in cfg.text_columns else []),
+            *[pl.col(c).cast(pl.String).drop_nulls().unique(maintain_order=True).alias(f"_text_{c}")
+              for c in value_cols],
         )
     )
 
     rows = []
     for r in grouped.iter_rows(named=True):
-        if len(r["content"]) > 1:
-            raise ValueError(f"exercise {r['exercise_id']} has {len(r['content'])} different contents")
-        obj, status = parse_content(r["content"][0])
-
-        lines = []
-        if cfg.include_hierarchy:
-            for col, label in HIERARCHY:
-                names = [clean(x) for x in r[col] if clean(x)]
+        lines, status = [], None
+        for col in cfg.text_columns:
+            if col == CONTENT:
+                if len(r["_content"]) > 1:
+                    raise ValueError(f"exercise {r['exercise_id']} has {len(r['_content'])} different contents")
+                obj, status = parse_content(r["_content"][0])
+                if obj is not None:
+                    lines.extend(content_lines(obj, cfg))
+                else:  # last resort: the raw content, cleaned
+                    lines.append(f"Contenu : {clean(r['_content'][0])}")
+            else:
+                names = [clean(x) for x in r[f"_text_{col}"] if clean(x)]
                 if names:
-                    lines.append(f"{label} : {' ; '.join(names)}")
-        if cfg.include_pedagogical_intent:
-            for col, label in INTENTS:
-                names = [clean(x) for x in r[col] if clean(x)]
-                if names:
-                    lines.append(f"{label} : {' ; '.join(names)}")
-        if cfg.include_gameplay_type:
-            lines.append(f"Type d'exercice : {r['gameplay_type']}")
-
-        if obj is not None:
-            lines.extend(content_lines(obj, cfg))
-        else:  # last resort: the raw content, cleaned
-            lines.append(f"Contenu : {clean(r['content'][0])}")
+                    lines.append(f"{LABELS.get(col, col)} : {' ; '.join(names)}")
 
         rows.append({
-            "exercise_id": r["exercise_id"],
-            "source": r["source"],
-            "gameplay_type": r["gameplay_type"],
+            **{c: r[c] for c in cfg.keep_columns},
             "parse_status": status,
             "text": "\n".join(lines),
         })

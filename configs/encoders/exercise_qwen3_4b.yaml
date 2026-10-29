@@ -14,9 +14,19 @@ model:
   prompt: null          # exercises are embedded as documents: no instruction
 
 text:
-  include_hierarchy: true
-  include_gameplay_type: true
+  # Every column of the exercise table must be in one of these lists (otherwise the run
+  # stops and names the missing ones). scripts/preview_exercise_texts.py checks this without a GPU.
+
+  # Copied into the output (first value when an exercise is listed several times).
+  # Must include exercise_id.
+  keep_columns: [exercise_id, source, gameplay_type]
+  # Written into the text, in this order. "content" is the exercise itself (parsed);
+  # any other column becomes "<label> : <value>" (all its distinct values, joined with " ; ").
+  text_columns: [module_name, objective_name, activity_name, gameplay_type, content]
+  # Not used.
+  drop_columns: [objective_pedagogical_intent, activity_pedagogical_intent]
+
+  # What is taken from the content:
   include_correct_answer: true
   include_feedback_incorrect: true
   include_feedback_correct: false
-  include_pedagogical_intent: false

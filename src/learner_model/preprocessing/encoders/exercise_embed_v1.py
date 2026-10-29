@@ -18,8 +18,8 @@ Quick test on 50 exercises (creates a separate dataset folder, delete it after):
 
 Output:
   datasets/exercise_embed_v1__<date>__<commit6>/
-    embeddings.parquet   exercise_id, embedding (float32, L2-normalized)
-    texts.parquet        exactly the texts that were embedded (+ source, gameplay_type, parse_status)
+    embeddings.parquet   <keep columns: exercise_id, ...>, embedding (float32, L2-normalized)
+    texts.parquet        exactly the texts that were embedded (+ keep columns, parse_status)
     manifest.json        written last
 """
 
@@ -51,6 +51,12 @@ def main():
     exercises_path = Path(cfg["exercises"]).resolve()
     text_cfg = TextConfig(**cfg.get("text", {}))
 
+    # 1. Texts first: a wrong column list fails here, before loading the model.
+    texts = build_texts(pl.read_parquet(exercises_path), text_cfg)
+    if args.limit:
+        texts = texts.head(args.limit)
+    print(f"{texts.height} exercise texts built")
+
     revision = resolve_revision(m["name"], m.get("revision", "main"))
     print(f"Model {m['name']} at commit {revision}")
 
@@ -65,12 +71,6 @@ def main():
     out = DatasetWriter(PIPELINE, config, root=args.root, allow_dirty=args.allow_dirty)
     if out.reuse:
         return
-
-    # 1. Texts
-    texts = build_texts(pl.read_parquet(exercises_path), text_cfg)
-    if args.limit:
-        texts = texts.head(args.limit)
-    print(f"{texts.height} exercise texts built")
 
     # 2. Embeddings
     model = load_model(m, revision)
@@ -99,10 +99,9 @@ def main():
     emb = emb / norms
 
     # 4. Save
-    pl.DataFrame({
-        "exercise_id": texts["exercise_id"],
-        "embedding": pl.Series(emb, dtype=pl.Array(pl.Float32, dim)),
-    }).write_parquet(out.path / "embeddings.parquet")
+    texts.select(text_cfg.keep_columns).with_columns(
+        embedding=pl.Series(emb, dtype=pl.Array(pl.Float32, dim)),
+    ).write_parquet(out.path / "embeddings.parquet")
     texts.write_parquet(out.path / "texts.parquet")
 
     out.finish(

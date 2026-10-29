@@ -2,43 +2,42 @@
 Build the exercise texts and print some of them, to check them by eye
 before spending GPU time. Only reads and prints (or writes to --out).
 
-Usage (from the repo root):
-  uv run python scripts/preview_exercise_texts.py ../MIAAM/data/maths_exercises_table.parquet
-  uv run python scripts/preview_exercise_texts.py <file> --n 2                 # 2 examples per gameplay_type
-  uv run python scripts/preview_exercise_texts.py <file> --type GRADUATED_RULER --n 5
-  uv run python scripts/preview_exercise_texts.py <file> --id b266c5b4-57a5-4384-99b2-cdc4f543e522
-  uv run python scripts/preview_exercise_texts.py <file> --no-hierarchy        # try other settings
-  uv run python scripts/preview_exercise_texts.py <file> --out /tmp/texts.txt  # all texts in one file
+Usage (from the repo root). The settings come from the "text" part of the config:
+copy the config to try other settings. Examples are picked per gameplay_type (keep that column).
+  uv run python scripts/preview_exercise_texts.py --config configs/encoders/exercise_qwen3_4b.yaml
+  uv run python scripts/preview_exercise_texts.py --config <file> --n 2      # 2 examples per gameplay_type
+  uv run python scripts/preview_exercise_texts.py --config <file> --type GRADUATED_RULER --n 5
+  uv run python scripts/preview_exercise_texts.py --config <file> --id b266c5b4-57a5-4384-99b2-cdc4f543e522
+  uv run python scripts/preview_exercise_texts.py --config <file> --out /tmp/texts.txt  # all texts in one file
 """
 
 import argparse
+from pathlib import Path
 
 import polars as pl
+import yaml
 
 from learner_model.preprocessing.exercise_text import TextConfig, build_texts
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("path")
+    p.add_argument("--config", required=True, help="e.g. configs/encoders/exercise_qwen3_4b.yaml")
     p.add_argument("--n", type=int, default=1, help="examples per gameplay_type")
     p.add_argument("--type", help="only this gameplay_type")
     p.add_argument("--id", help="only this exercise_id")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", help="write ALL texts to this file")
-    p.add_argument("--no-hierarchy", action="store_true")
-    p.add_argument("--no-answer", action="store_true")
-    p.add_argument("--no-feedback", action="store_true")
-    p.add_argument("--with-intent", action="store_true")
     args = p.parse_args()
 
-    cfg = TextConfig(
-        include_hierarchy=not args.no_hierarchy,
-        include_correct_answer=not args.no_answer,
-        include_feedback_incorrect=not args.no_feedback,
-        include_pedagogical_intent=args.with_intent,
-    )
-    texts = build_texts(pl.read_parquet(args.path), cfg)
+    config = yaml.safe_load(Path(args.config).read_text())
+    cfg = TextConfig(**config.get("text", {}))
+    exercises = pl.read_parquet(config["exercises"])
+    print(f"{exercises.height} rows | all columns: {exercises.columns}")
+    print(f"in the text: {cfg.text_columns}")
+    print(f"kept as is:  {cfg.keep_columns}")
+    print(f"dropped:     {cfg.drop_columns}")
+    texts = build_texts(exercises, cfg)
 
     # ---- summary
     chars = texts["text"].str.len_chars()
@@ -61,7 +60,7 @@ def main():
     if args.out:
         with open(args.out, "w") as f:
             for r in texts.iter_rows(named=True):
-                f.write(f"##### {r['exercise_id']} [{r['gameplay_type']}, {r['source']}, {r['parse_status']}]\n")
+                f.write(f"##### {r['exercise_id']} [{r.get('gameplay_type')}, {r.get('source')}, {r['parse_status']}]\n")
                 f.write(r["text"] + "\n\n")
         print(f"\nAll texts written to {args.out}")
 
@@ -80,7 +79,7 @@ def main():
                 "exercise_id", maintain_order=True)
 
     for r in sample.iter_rows(named=True):
-        print(f"\n{'=' * 80}\n{r['exercise_id']}  [{r['gameplay_type']}, {r['source']}, {r['parse_status']}]\n{'-' * 80}")
+        print(f"\n{'=' * 80}\n{r['exercise_id']}  [{r.get('gameplay_type')}, {r.get('source')}, {r['parse_status']}]\n{'-' * 80}")
         print(r["text"])
 
 

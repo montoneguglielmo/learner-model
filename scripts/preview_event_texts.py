@@ -30,9 +30,8 @@ def main():
     used = columns_in_text(events.columns, text_cfg)
     print(f"in the text:  {used}")
     print(f"kept as is:   {text_cfg.keep_columns}")
+    print(f"dropped:      {text_cfg.drop_columns}")
     print(f"targets:      {text_cfg.target_columns}")
-    others = set(used) | set(text_cfg.keep_columns + text_cfg.target_columns)
-    print(f"not used:     {[c for c in events.columns if c not in others]}")
 
     texts = build_event_texts(events, text_cfg)
     chars = texts["text"].str.len_chars()
