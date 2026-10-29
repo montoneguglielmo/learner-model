@@ -19,9 +19,11 @@ text:
   keep_columns: [exercise_id]
   # What a model must predict: never in the text.
   target_columns: [data_correct, data_answer]
-  # Other columns left out of the text (user_id and created_at are always kept apart).
-  # Raw ids (UUIDs) carry little meaning as text, e.g. classroom_id, session_id, module_id.
-  drop_columns: []
+  # The ONLY columns written into the text, in this order. Any other column is not used.
+  # Left out on purpose: raw ids (classroom_id, playlist_or_module_id, session_id, module_id):
+  # UUIDs carry little meaning as text, and module_name already names the module.
+  # Run scripts/preview_event_texts.py: it prints the columns that are "not used".
+  text_columns: [module_name, work_mode, source, attempt_index, data_duration]
   include_nulls: false
   float_digits: 3
   max_value_chars: 300

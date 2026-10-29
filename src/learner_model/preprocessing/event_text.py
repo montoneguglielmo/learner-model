@@ -5,15 +5,18 @@ Used by the event encoder (encoders/event_embed_v1.py).
 The result has exactly one row per event, in the same order as the output
 embeddings: sorted by user_id, created_at.
 
-The text is one "column: value" line per remaining column, e.g.
+The text is one "column: value" line per text column, in the order of the config, e.g.
   attempt_index: 2
   data_duration: 13.42
   source: v1.0
 
-Columns NOT in the text:
-  - user_id, created_at and the keep columns (e.g. exercise_id): kept as their own columns
-  - target columns (e.g. data_correct, data_answer): what a model must predict
-  - drop columns: anything else you do not want (ids, ...)
+Columns:
+  - user_id, created_at and the keep columns (e.g. exercise_id): their own output columns
+  - text columns: listed by name in the config. A column that is not listed is NOT used,
+    so a new column in the data never enters the text by surprise.
+    (text_columns: null = every column that is not a key, keep or target column.)
+  - target columns (e.g. data_correct, data_answer): what a model must predict.
+    Never in the text: listing one as a text or keep column is an error.
   - empty values (null, NaN, ""): the line is skipped, unless include_nulls
 """
 
@@ -28,8 +31,8 @@ KEY = ["user_id", "created_at"]
 class EventTextConfig:
     """What goes into the text. Saved in the manifest of the embedding dataset."""
     keep_columns: list = field(default_factory=lambda: ["exercise_id"])  # own output columns, not in the text
+    text_columns: list | None = None  # None = all the other columns
     target_columns: list = field(default_factory=lambda: ["data_correct", "data_answer"])
-    drop_columns: list = field(default_factory=list)
     include_nulls: bool = False   # True: write "column: null" instead of skipping the line
     float_digits: int = 3         # floats are rounded to this many decimals
     max_value_chars: int = 300    # longer values are cut (long free text would dominate)
@@ -38,16 +41,22 @@ class EventTextConfig:
         return asdict(self)
 
 
-def text_columns(columns, cfg):
-    """The columns that go into the text, in table order. Fails on unknown names."""
-    unknown = [c for c in cfg.keep_columns + cfg.target_columns + cfg.drop_columns if c not in columns]
+def columns_in_text(columns, cfg):
+    """The columns that go into the text. Fails on unknown names and on targets."""
+    listed = cfg.keep_columns + cfg.target_columns + (cfg.text_columns or [])
+    unknown = [c for c in dict.fromkeys(listed) if c not in columns]
     if unknown:
-        raise ValueError(f"Columns {unknown} (keep/target/drop) are not in the table. "
+        raise ValueError(f"Columns {unknown} are in the config but not in the table. "
                          f"Available columns: {list(columns)}")
     missing = [c for c in KEY if c not in columns]
     if missing:
         raise ValueError(f"Columns {missing} are required but not in the table")
-    skip = set(KEY) | set(cfg.keep_columns) | set(cfg.target_columns) | set(cfg.drop_columns)
+    leak = [c for c in cfg.target_columns if c in cfg.keep_columns + (cfg.text_columns or [])]
+    if leak:
+        raise ValueError(f"Target columns {leak} are also listed as text or keep columns")
+    if cfg.text_columns is not None:
+        return list(cfg.text_columns)
+    skip = set(KEY) | set(cfg.keep_columns) | set(cfg.target_columns)
     return [c for c in columns if c not in skip]
 
 
@@ -75,7 +84,7 @@ def build_event_texts(events: pl.DataFrame, cfg: EventTextConfig) -> pl.DataFram
       event_id    row number in the input table (user_id + created_at may not be unique)
       user_id, created_at, <keep columns>, text
     """
-    cols = text_columns(events.columns, cfg)
+    cols = columns_in_text(events.columns, cfg)
     lines = [pl.concat_str(pl.lit(f"{c}: "), _value(c, events.schema[c], cfg)) for c in cols]
     text = pl.concat_str(lines, separator="\n", ignore_nulls=True) if lines else pl.lit("")
     return (

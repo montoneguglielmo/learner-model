@@ -13,7 +13,7 @@ from pathlib import Path
 import polars as pl
 import yaml
 
-from learner_model.preprocessing.event_text import EventTextConfig, build_event_texts, text_columns
+from learner_model.preprocessing.event_text import EventTextConfig, build_event_texts, columns_in_text
 
 
 def main():
@@ -27,10 +27,12 @@ def main():
     text_cfg = EventTextConfig(**cfg.get("text", {}))
     events = pl.read_parquet(cfg["events"])
     print(f"{events.height} events | all columns: {events.columns}")
-    print(f"in the text:  {text_columns(events.columns, text_cfg)}")
+    used = columns_in_text(events.columns, text_cfg)
+    print(f"in the text:  {used}")
     print(f"own columns:  user_id, created_at, {text_cfg.keep_columns}")
     print(f"targets:      {text_cfg.target_columns}")
-    print(f"dropped:      {text_cfg.drop_columns}")
+    others = set(used) | {"user_id", "created_at"} | set(text_cfg.keep_columns + text_cfg.target_columns)
+    print(f"not used:     {[c for c in events.columns if c not in others]}")
 
     texts = build_event_texts(events, text_cfg)
     chars = texts["text"].str.len_chars()

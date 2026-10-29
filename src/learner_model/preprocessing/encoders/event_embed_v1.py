@@ -2,9 +2,8 @@
 Encoder "event_embed_v1": one vector per event (one row of the interactions table),
 from a short "column: value" text.
 
-  1. Build one text per event (event_text.py): every column except user_id,
-     created_at, the keep columns, the target columns and the drop columns (see the "text" part
-     of the config).
+  1. Build one text per event (event_text.py) from the text columns listed in
+     the "text" part of the config (never the target columns).
   2. Embed each text with a sentence-embedding model (e.g. Qwen3-Embedding).
      Events are done in chunks; inside a chunk, identical texts are embedded once.
   3. Optionally keep only the first `output_dim` values (Matryoshka), then L2-normalize.
