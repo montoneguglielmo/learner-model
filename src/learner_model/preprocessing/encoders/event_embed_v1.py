@@ -36,6 +36,7 @@ import numpy as np
 import polars as pl
 import pyarrow.parquet as pq
 import yaml
+from tqdm import tqdm
 
 from learner_model.common.datasets import DatasetWriter
 from learner_model.common.sentence_models import gpu_name, library_versions, load_model, resolve_revision
@@ -62,7 +63,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", required=True, help="YAML file, e.g. configs/encoders/event_qwen3_0.6b.yaml")
     p.add_argument("--limit", type=int, default=None, help="only the first N events (quick tests)")
-    p.add_argument("--chunk-size", type=int, default=100_000, help="events per chunk (memory only)")
+    p.add_argument("--chunk-size", type=int, default=20_000,
+                   help="events per chunk (memory, and how often the progress bar moves)")
     p.add_argument("--root", default="datasets", help="where dataset folders are created")
     p.add_argument("--allow-dirty", action="store_true", help="allow uncommitted changes (quick tests only)")
     args = p.parse_args()
@@ -102,6 +104,7 @@ def main():
     writer = None
     n_tokens, n_unique = [], 0
     t0 = time.time()
+    bar = tqdm(total=texts.height, unit="event", desc="Embedding", smoothing=0.1)
     for start in range(0, texts.height, args.chunk_size):
         chunk = texts.slice(start, args.chunk_size)
         uniq = chunk.select(pl.col("text").unique(maintain_order=True)).with_row_index("k")
@@ -117,11 +120,8 @@ def main():
             writer = pq.ParquetWriter(out.path / "embeddings.parquet", table.schema)
         writer.write_table(table)
 
-        done = start + chunk.height
-        rate = done / (time.time() - t0)
-        print(f"\r  {done}/{texts.height} events | ETA {(texts.height - done) / rate / 60:.1f} min   ",
-              end="", flush=True)
-    print()
+        bar.update(chunk.height)
+    bar.close()
     if writer is not None:
         writer.close()
     seconds = round(time.time() - t0, 1)
