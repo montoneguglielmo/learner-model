@@ -15,9 +15,12 @@ model:
   prompt: null
 
 text:
+  # Kept as their own output columns (to join with other tables), not in the text.
+  keep_columns: [exercise_id]
   # What a model must predict: never in the text.
   target_columns: [data_correct, data_answer]
   # Other columns left out of the text (user_id and created_at are always kept apart).
+  # Raw ids (UUIDs) carry little meaning as text, e.g. classroom_id, session_id, module_id.
   drop_columns: []
   include_nulls: false
   float_digits: 3

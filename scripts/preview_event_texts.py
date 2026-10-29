@@ -28,6 +28,7 @@ def main():
     events = pl.read_parquet(cfg["events"])
     print(f"{events.height} events | all columns: {events.columns}")
     print(f"in the text:  {text_columns(events.columns, text_cfg)}")
+    print(f"own columns:  user_id, created_at, {text_cfg.keep_columns}")
     print(f"targets:      {text_cfg.target_columns}")
     print(f"dropped:      {text_cfg.drop_columns}")
 

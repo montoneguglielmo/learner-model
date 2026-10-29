@@ -3,7 +3,7 @@ Encoder "event_embed_v1": one vector per event (one row of the interactions tabl
 from a short "column: value" text.
 
   1. Build one text per event (event_text.py): every column except user_id,
-     created_at, the target columns and the drop columns (see the "text" part
+     created_at, the keep columns, the target columns and the drop columns (see the "text" part
      of the config).
   2. Embed each text with a sentence-embedding model (e.g. Qwen3-Embedding).
      Events are done in chunks; inside a chunk, identical texts are embedded once.
@@ -23,9 +23,9 @@ Quick test on 5000 events (creates a separate dataset folder, delete it after):
 
 Output:
   datasets/event_embed_v1__<date>__<commit6>/
-    embeddings.parquet   event_id, user_id, created_at, embedding (float32, L2-normalized),
+    embeddings.parquet   event_id, user_id, created_at, <keep columns, e.g. exercise_id>, embedding (float32, L2-normalized),
                          sorted by user_id, created_at
-    texts.parquet        event_id, user_id, created_at, text: exactly the texts that were embedded
+    texts.parquet        event_id, user_id, created_at, <keep columns>, text: exactly the texts that were embedded
     manifest.json        written last
 """
 
@@ -112,7 +112,7 @@ def main():
 
         emb = embed(model, docs, m, dim)
         k = chunk.join(uniq, on="text", how="left", maintain_order="left")["k"].to_numpy()
-        table = chunk.select("event_id", "user_id", "created_at").with_columns(
+        table = chunk.drop("text").with_columns(
             embedding=pl.Series(emb[k], dtype=pl.Array(pl.Float32, dim))).to_arrow()
         if writer is None:
             writer = pq.ParquetWriter(out.path / "embeddings.parquet", table.schema)
