@@ -17,7 +17,8 @@ Each text is one "column: value" line per column, in the order of the config, e.
 Columns (every column of the table must be in one list, see columns.py):
   - keep_columns: the output columns, copied as they are (must include user_id, created_at)
   - embed_event_columns: written into the event text
-  - embed_result_columns: written into the result text (never also in the event text)
+  - embed_result_columns: written into the result text (never also in the event text).
+    Empty list: no result text and no result embedding at all.
   - drop_columns: not used
   - empty values (null, NaN, ""): the line is skipped, unless include_nulls
 """
@@ -50,13 +51,17 @@ KINDS = ("event", "result")  # one text and one embedding of each kind per event
 
 
 def text_columns(columns, cfg):
-    """{"event": [...], "result": [...]}. Fails if the config lists do not match the table."""
+    """{"event": [...], "result": [...]}, without "result" when embed_result_columns is empty.
+    Fails if the config lists do not match the table."""
+    if not cfg.embed_event_columns:
+        raise ValueError("embed_event_columns is empty")
     both = [c for c in cfg.embed_result_columns if c in cfg.embed_event_columns]
     if both:
         raise ValueError(f"Columns {both} are in both embed_event_columns and embed_result_columns")
     check_columns(columns, cfg.keep_columns, cfg.embed_event_columns + cfg.embed_result_columns,
                   cfg.drop_columns, required_keep=KEY)
-    return {"event": list(cfg.embed_event_columns), "result": list(cfg.embed_result_columns)}
+    cols = {"event": list(cfg.embed_event_columns), "result": list(cfg.embed_result_columns)}
+    return {k: v for k, v in cols.items() if v}
 
 
 def _text(cols, schema, cfg):
@@ -89,12 +94,12 @@ def build_event_texts(events: pl.DataFrame, cfg: EventTextConfig) -> pl.DataFram
     """
     One row per event, sorted by user_id, created_at, with columns:
       event_id    row number in the input table (user_id + created_at may not be unique)
-      <keep columns> (user_id, created_at, ...), event_text, result_text
+      <keep columns> (user_id, created_at, ...), event_text, result_text (if any result columns)
     """
     cols = text_columns(events.columns, cfg)
     return (
         events.with_row_index("event_id")
         .select("event_id", *cfg.keep_columns,
-                *[_text(cols[k], events.schema, cfg).alias(f"{k}_text") for k in KINDS])
+                *[_text(cols[k], events.schema, cfg).alias(f"{k}_text") for k in cols])
         .sort([*KEY, "event_id"])
     )

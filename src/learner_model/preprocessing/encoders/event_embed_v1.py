@@ -2,7 +2,8 @@
 Encoder "event_embed_v1": TWO vectors per event (one row of the interactions table),
 each from a short "column: value" text:
   event_embedding   from embed_event_columns (what the event is)
-  result_embedding  from embed_result_columns (what the student answered)
+  result_embedding  from embed_result_columns (what the student answered);
+                    not made when embed_result_columns is empty
 
   1. Build the two texts per event (event_text.py), with the column lists in
      the "text" part of the config.
@@ -107,14 +108,15 @@ def main():
 
     # Chunks, so that all the embeddings never need to be in memory at once.
     writer = None
-    n_tokens = {k: [] for k in KINDS}
-    n_unique = {k: 0 for k in KINDS}
+    kinds = [k for k in KINDS if f"{k}_text" in texts.columns]  # no "result" if no result columns
+    n_tokens = {k: [] for k in kinds}
+    n_unique = {k: 0 for k in kinds}
     t0 = time.time()
     bar = tqdm(total=texts.height, unit="event", desc="Embedding", smoothing=0.1)
     for start in range(0, texts.height, args.chunk_size):
         chunk = texts.slice(start, args.chunk_size)
-        table = chunk.drop([f"{k}_text" for k in KINDS])
-        for kind in KINDS:
+        table = chunk.drop([f"{k}_text" for k in kinds])
+        for kind in kinds:
             col = f"{kind}_text"
             uniq = chunk.select(pl.col(col).unique(maintain_order=True)).with_row_index("k")
             docs = [prompt + t for t in uniq[col].to_list()]
@@ -164,7 +166,7 @@ def main():
     )
     print(f"Created {out.path}")
     print(f"  {texts.height} events | dim {dim} (model gives {full_dim}) | {seconds} s")
-    for kind in KINDS:
+    for kind in kinds:
         print(f"  {kind}: {n_unique[kind]} texts embedded | tokens median {token_stats[kind]['median']}, "
               f"max {token_stats[kind]['max']}")
 
