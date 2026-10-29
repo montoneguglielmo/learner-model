@@ -1,0 +1,24 @@
+# Encoder event_embed_v1 with Qwen3-Embedding-0.6B.
+# One vector per event (about 6M rows): the small model keeps this to a few hours.
+# Small changes (other dim, other columns) = a new config file.
+
+events: ../MIAAM/data/maths_data_filtered.parquet
+
+model:
+  name: Qwen/Qwen3-Embedding-0.6B
+  revision: main        # resolved to the exact commit hash at run time, saved in the manifest
+  dtype: bfloat16
+  device: cuda
+  max_length: 512       # tokens; event texts are short
+  batch_size: 256
+  output_dim: 256       # keep the first 256 of 1024 values (Matryoshka). null = keep all
+  prompt: null
+
+text:
+  # What a model must predict: never in the text.
+  target_columns: [data_correct, data_answer]
+  # Other columns left out of the text (user_id and created_at are always kept apart).
+  drop_columns: []
+  include_nulls: false
+  float_digits: 3
+  max_value_chars: 300
