@@ -95,7 +95,8 @@ def main():
 
     model = load_model(m, revision)
     prompt = m.get("prompt") or ""
-    dim = m.get("output_dim") or model.get_sentence_embedding_dimension()
+    full_dim = model.get_embedding_dimension()
+    dim = m.get("output_dim") or full_dim
 
     # Chunks, so that all the embeddings never need to be in memory at once.
     writer = None
@@ -131,7 +132,6 @@ def main():
     if n_truncated:
         print(f"WARNING: {n_truncated} texts were longer than max_length={m['max_length']} tokens and were cut")
 
-    full_dim = model.get_sentence_embedding_dimension()
     out.finish(
         input_files=[events_path],
         extra={
