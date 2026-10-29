@@ -15,8 +15,7 @@ model:
   prompt: null
 
 text:
-  # Every column of the table must be in one of these lists (otherwise the run stops
-  # and names the missing ones). scripts/preview_event_texts.py checks this without a GPU.
+  # Columns in no list are not used; scripts/preview_event_texts.py prints them ("not used").
 
   # Copied as they are into the output (ids to join with other tables). Must include
   # user_id and created_at (the output is sorted by them).
@@ -26,8 +25,6 @@ text:
   # Written into the result text -> result_embedding (what the student answered).
   # Never also in the event text.
   embed_result_columns: [data_correct, data_answer]
-  # Not used.
-  drop_columns: []
 
   include_nulls: false
   float_digits: 3

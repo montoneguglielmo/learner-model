@@ -13,7 +13,7 @@ from pathlib import Path
 import polars as pl
 import yaml
 
-from learner_model.preprocessing.event_text import EventTextConfig, build_event_texts, text_columns
+from learner_model.preprocessing.event_text import EventTextConfig, build_event_texts, not_used, text_columns
 
 
 def main():
@@ -31,7 +31,7 @@ def main():
     print(f"kept as is:   {text_cfg.keep_columns}")
     print(f"event text:   {cols['event']}")
     print(f"result text:  {cols.get('result', 'none (embed_result_columns is empty)')}")
-    print(f"dropped:      {text_cfg.drop_columns}")
+    print(f"not used:     {not_used(events.columns, text_cfg)}")
 
     texts = build_event_texts(events, text_cfg)
     for kind in cols:

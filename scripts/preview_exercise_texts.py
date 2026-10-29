@@ -17,7 +17,7 @@ from pathlib import Path
 import polars as pl
 import yaml
 
-from learner_model.preprocessing.exercise_text import TextConfig, build_texts
+from learner_model.preprocessing.exercise_text import TextConfig, build_texts, not_used
 
 
 def main():
@@ -36,7 +36,7 @@ def main():
     print(f"{exercises.height} rows | all columns: {exercises.columns}")
     print(f"in the text: {cfg.text_columns}")
     print(f"kept as is:  {cfg.keep_columns}")
-    print(f"dropped:     {cfg.drop_columns}")
+    print(f"not used:    {not_used(exercises.columns, cfg)}")
     texts = build_texts(exercises, cfg)
 
     # ---- summary

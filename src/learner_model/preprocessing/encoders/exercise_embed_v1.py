@@ -33,7 +33,7 @@ import yaml
 
 from learner_model.common.datasets import DatasetWriter
 from learner_model.common.sentence_models import gpu_name, library_versions, load_model, resolve_revision
-from learner_model.preprocessing.exercise_text import TextConfig, build_texts
+from learner_model.preprocessing.exercise_text import TextConfig, build_texts, not_used
 
 PIPELINE = "exercise_embed_v1"
 
@@ -52,7 +52,9 @@ def main():
     text_cfg = TextConfig(**cfg.get("text", {}))
 
     # 1. Texts first: a wrong column list fails here, before loading the model.
-    texts = build_texts(pl.read_parquet(exercises_path), text_cfg)
+    exercises = pl.read_parquet(exercises_path)
+    print(f"Columns not used: {not_used(exercises.columns, text_cfg)}")
+    texts = build_texts(exercises, text_cfg)
     if args.limit:
         texts = texts.head(args.limit)
     print(f"{texts.height} exercise texts built")

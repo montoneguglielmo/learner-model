@@ -4,12 +4,12 @@ Turn each exercise of the MIAAM exercise table into ONE clean text.
 Used by the exercise encoder (and later by encoders that combine image + text).
 The result has exactly one row per exercise_id.
 
-Columns (every column of the table must be in one list, see columns.py):
+Columns (see columns.py):
   - keep columns: copied into the output (must include exercise_id)
   - text columns: written into the text, in the order of the config.
     "content" is parsed (see below); any other column becomes "<label> : <value>",
     with a French label for the known columns (LABELS) and the column name otherwise.
-  - drop columns: not used
+  - any other column: not used
 
 What it handles:
   - two content structures: flat (instruction, question, ...) and
@@ -41,7 +41,7 @@ from dataclasses import asdict, dataclass, field
 
 import polars as pl
 
-from learner_model.preprocessing.columns import check_columns
+from learner_model.preprocessing.columns import check_columns, unused_columns
 
 LABELS = {
     "module_name": "Module",
@@ -66,8 +66,6 @@ class TextConfig:
     keep_columns: list = field(default_factory=lambda: ["exercise_id", "source", "gameplay_type"])
     text_columns: list = field(default_factory=lambda: [
         "module_name", "objective_name", "activity_name", "gameplay_type", CONTENT])
-    drop_columns: list = field(default_factory=lambda: [
-        "objective_pedagogical_intent", "activity_pedagogical_intent"])
     # What is taken from the content (the exercise itself):
     include_correct_answer: bool = True
     include_feedback_incorrect: bool = True  # often explains the skill being tested
@@ -208,6 +206,11 @@ def content_lines(obj, cfg):
 
 # ------------------------------------------------------------ main function
 
+def not_used(columns, cfg):
+    """Columns of the table that are neither kept nor in the text."""
+    return unused_columns(columns, cfg.keep_columns, cfg.text_columns)
+
+
 def build_texts(exercises: pl.DataFrame, cfg: TextConfig) -> pl.DataFrame:
     """
     One row per exercise_id, with columns:
@@ -216,8 +219,7 @@ def build_texts(exercises: pl.DataFrame, cfg: TextConfig) -> pl.DataFrame:
     and all the distinct values of each text column, joined with " ; ".
     parse_status: 'json', 'python', 'failed', or None when content is not a text column.
     """
-    check_columns(exercises.columns, cfg.keep_columns, cfg.text_columns, cfg.drop_columns,
-                  required_keep=["exercise_id"])
+    check_columns(exercises.columns, cfg.keep_columns, cfg.text_columns, required_keep=["exercise_id"])
     value_cols = [c for c in cfg.text_columns if c != CONTENT]
     grouped = (
         exercises.group_by("exercise_id", maintain_order=True)

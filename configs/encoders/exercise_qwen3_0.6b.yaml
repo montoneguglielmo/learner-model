@@ -13,8 +13,10 @@ model:
   prompt: null
 
 text:
-  # Every column of the exercise table must be in one of these lists (otherwise the run
-  # stops and names the missing ones). scripts/preview_exercise_texts.py checks this without a GPU.
+  # Columns in no list are not used; scripts/preview_exercise_texts.py prints them ("not used").
+  # Not used on purpose: module_id, objective_id, activity_id (an exercise can sit in several
+  # modules/objectives/activities, so one kept value per exercise would be misleading; their
+  # names are in the text instead) and the pedagogical intents.
 
   # Copied into the output (first value when an exercise is listed several times).
   # Must include exercise_id.
@@ -22,10 +24,6 @@ text:
   # Written into the text, in this order. "content" is the exercise itself (parsed);
   # any other column becomes "<label> : <value>" (all its distinct values, joined with " ; ").
   text_columns: [module_name, objective_name, activity_name, gameplay_type, content]
-  # Not used.
-  # module_id, objective_id, activity_id: an exercise can sit in several modules/objectives/activities,
-  # so one kept value per exercise would be misleading; their names are in the text instead.
-  drop_columns: [module_id, objective_id, activity_id, objective_pedagogical_intent, activity_pedagogical_intent]
 
   # What is taken from the content:
   include_correct_answer: true

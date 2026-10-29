@@ -14,12 +14,12 @@ Each text is one "column: value" line per column, in the order of the config, e.
   data_duration: 13.42
   source: v1.0
 
-Columns (every column of the table must be in one list, see columns.py):
+Columns (see columns.py):
   - keep_columns: the output columns, copied as they are (must include user_id, created_at)
   - embed_event_columns: written into the event text
   - embed_result_columns: written into the result text (never also in the event text).
     Empty list: no result text and no result embedding at all.
-  - drop_columns: not used
+  - any other column: not used
   - empty values (null, NaN, ""): the line is skipped, unless include_nulls
 """
 
@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field
 
 import polars as pl
 
-from learner_model.preprocessing.columns import check_columns
+from learner_model.preprocessing.columns import check_columns, unused_columns
 
 KEY = ["user_id", "created_at"]  # the output is sorted by these
 
@@ -38,7 +38,6 @@ class EventTextConfig:
     keep_columns: list = field(default_factory=lambda: KEY + ["exercise_id"])
     embed_event_columns: list = field(default_factory=list)
     embed_result_columns: list = field(default_factory=lambda: ["data_correct", "data_answer"])
-    drop_columns: list = field(default_factory=list)
     include_nulls: bool = False   # True: write "column: null" instead of skipping the line
     float_digits: int = 3         # floats are rounded to this many decimals
     max_value_chars: int = 300    # longer values are cut (long free text would dominate)
@@ -59,9 +58,14 @@ def text_columns(columns, cfg):
     if both:
         raise ValueError(f"Columns {both} are in both embed_event_columns and embed_result_columns")
     check_columns(columns, cfg.keep_columns, cfg.embed_event_columns + cfg.embed_result_columns,
-                  cfg.drop_columns, required_keep=KEY)
+                  required_keep=KEY)
     cols = {"event": list(cfg.embed_event_columns), "result": list(cfg.embed_result_columns)}
     return {k: v for k, v in cols.items() if v}
+
+
+def not_used(columns, cfg):
+    """Columns of the table that are neither kept nor embedded."""
+    return unused_columns(columns, cfg.keep_columns, cfg.embed_event_columns + cfg.embed_result_columns)
 
 
 def _text(cols, schema, cfg):

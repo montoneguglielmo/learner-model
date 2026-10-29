@@ -46,7 +46,7 @@ from tqdm import tqdm
 
 from learner_model.common.datasets import DatasetWriter
 from learner_model.common.sentence_models import gpu_name, library_versions, load_model, resolve_revision
-from learner_model.preprocessing.event_text import KINDS, EventTextConfig, build_event_texts
+from learner_model.preprocessing.event_text import KINDS, EventTextConfig, build_event_texts, not_used
 
 PIPELINE = "event_embed_v1"
 
@@ -81,7 +81,10 @@ def main():
     text_cfg = EventTextConfig(**cfg.get("text", {}))
 
     # Texts first: a wrong column name fails here, before loading the model.
-    texts = build_event_texts(pl.read_parquet(events_path), text_cfg)
+    events = pl.read_parquet(events_path)
+    print(f"Columns not used: {not_used(events.columns, text_cfg)}")
+    texts = build_event_texts(events, text_cfg)
+    del events
     if args.limit:
         texts = texts.head(args.limit)
     print(f"{texts.height} event texts built")
