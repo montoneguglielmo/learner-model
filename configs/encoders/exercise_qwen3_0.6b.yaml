@@ -23,7 +23,9 @@ text:
   # any other column becomes "<label> : <value>" (all its distinct values, joined with " ; ").
   text_columns: [module_name, objective_name, activity_name, gameplay_type, content]
   # Not used.
-  drop_columns: [objective_pedagogical_intent, activity_pedagogical_intent]
+  # module_id, objective_id, activity_id: an exercise can sit in several modules/objectives/activities,
+  # so one kept value per exercise would be misleading; their names are in the text instead.
+  drop_columns: [module_id, objective_id, activity_id, objective_pedagogical_intent, activity_pedagogical_intent]
 
   # What is taken from the content:
   include_correct_answer: true
