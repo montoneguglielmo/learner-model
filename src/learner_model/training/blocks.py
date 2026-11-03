@@ -67,6 +67,9 @@ class EventStore:
       ex_row[i]       row of its exercise in ex_matrix, -1 if the exercise has no embedding
       correct[i]      data_correct as 0/1
       log_dt[i]       log(1 + seconds since the same student's previous event), -1 for the first
+      event_id[i]     id of the event in the encoder output (for predictions)
+      n_past[i]       number of earlier events of the same student (whole history)
+      p_baseline[i]   smoothed success rate so far: (correct before + 1) / (n_past + 2)
     Per student: rows start[k] .. start[k] + length[k] - 1, student id users[k].
     """
 
@@ -94,12 +97,20 @@ class EventStore:
         self.ex_row = np.array([ex_pos.get(e, -1) for e in events["exercise_id"].to_list()], dtype=np.int32)
         self.n_unknown_exercises = int((self.ex_row < 0).sum())
 
+        y = pl.col("data_correct").cast(pl.Int32)
+        n_past = pl.int_range(pl.len()).over("user_id")
+        past_correct = (y.cum_sum() - y).over("user_id")
         keys = events.select(
-            "user_id",
+            "user_id", "event_id",
             log_dt=(pl.col("created_at") - pl.col("created_at").shift(1)).over("user_id")
                    .dt.total_seconds().clip(lower_bound=0).log1p().fill_null(-1),
+            n_past=n_past,
+            p_baseline=(past_correct + 1) / (n_past + 2),  # smoothed success rate so far
         )
         self.log_dt = keys["log_dt"].cast(pl.Float32).to_numpy()
+        self.event_id = keys["event_id"].to_numpy()
+        self.n_past = keys["n_past"].to_numpy()          # events of the student before this one
+        self.p_baseline = keys["p_baseline"].cast(pl.Float32).to_numpy()
         runs = keys.select(pl.col("user_id").rle()).unnest("user_id")  # len, value, in order
         self.users = runs["value"].to_list()
         self.length = runs["len"].to_numpy().astype(np.int64)
@@ -247,13 +258,23 @@ def batches(blocks, batch_size):
         yield batch
 
 
-def collate(blocks, pad_to=128):
+def max_tokens(cfg: BlockConfig, pad_to=128):
+    """Largest possible block length, rounded up to pad_to: a fixed length for every batch
+    (a compiled FlexAttention kernel is then built once instead of once per length)."""
+    n = (cfg.n_targets + cfg.n_context) * (1 + 3 * cfg.max_events)
+    return -(-n // pad_to) * pad_to
+
+
+def collate(blocks, pad_to=128, length=None, n_events=None):
     """Pad blocks to one length (a multiple of pad_to, which FlexAttention likes) and stack.
+    length / n_events: fixed token / event lengths (default: the longest block of the batch).
     Padding tokens have kind PAD, student -1, event -1, label -1. Returns numpy arrays
     of shape (B, L) for tokens and (B, E, ...) for events; torch conversion is left to the model."""
     B = len(blocks)
-    L = -(-max(len(b["kind"]) for b in blocks) // pad_to) * pad_to
-    E = max(len(b["rows"]) for b in blocks)
+    L = length or -(-max(len(b["kind"]) for b in blocks) // pad_to) * pad_to
+    E = n_events or max(len(b["rows"]) for b in blocks)
+    if L < max(len(b["kind"]) for b in blocks) or E < max(len(b["rows"]) for b in blocks):
+        raise ValueError("A block is longer than the fixed length")
     pads = {"kind": PAD, "student": -1, "target": False, "pos": 0, "event": -1, "label": -1}
     out = {k: np.full((B, L), v, dtype=blocks[0][k].dtype) for k, v in pads.items()}
     for k in ("ex", "ev", "res"):
