@@ -30,6 +30,6 @@ train:
   max_epochs: 20
   patience: 5         # stop after this many epochs without a better val AUC
   grad_clip: 1.0
-  log_every: 50       # steps
+  log_every: 50       # steps between W&B logs (the progress bar updates every step)
   val_max_students: null   # evaluate on a subset of val students each epoch (faster). null = all
   seed: 0

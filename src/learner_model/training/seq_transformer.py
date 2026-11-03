@@ -42,6 +42,7 @@ import numpy as np
 import polars as pl
 import torch
 import yaml
+from tqdm import tqdm
 
 from learner_model.common.datasets import git_info
 from learner_model.common.splits import load_split
@@ -74,11 +75,13 @@ class Runner:
 
 
 @torch.no_grad()
-def predict(model, runner, blocks, batch_size):
+def predict(model, runner, blocks, batch_size, desc="predict"):
     """One row per labelled token (EV token of a target)."""
     model.eval()
+    blocks = list(blocks)
     store, cols = runner.store, {"rows": [], "p": []}
-    for specs in batches(blocks, batch_size):
+    for specs in tqdm(batches(blocks, batch_size), total=-(-len(blocks) // batch_size), desc=desc,
+                      unit="batch", leave=False):
         batch = runner.batch(specs)
         b = to_tensors(batch, runner.device)
         with runner.autocast:
@@ -165,6 +168,7 @@ def train(store, split, block_cfg, model_cfg, tc, run_dir, device="cuda", attent
     for epoch in range(tc["max_epochs"]):
         model.train()
         t0, losses = time.time(), []
+        bar = tqdm(total=steps_per_epoch, desc=f"epoch {epoch}", unit="step", smoothing=0.1)
         for i, specs in enumerate(batches(sampler.epoch(epoch), tc["batch_size"])):
             if i >= steps_per_epoch:
                 break
@@ -178,15 +182,15 @@ def train(store, split, block_cfg, model_cfg, tc, run_dir, device="cuda", attent
             sched.step()
             step += 1
             losses.append(loss.item())
+            bar.update(1)
+            bar.set_postfix(loss=f"{np.mean(losses[-tc['log_every']:]):.4f}", lr=f"{sched.get_last_lr()[0]:.1e}")
             if step % tc["log_every"] == 0:
-                el = time.time() - t0
-                print(f"epoch {epoch} step {i + 1}/{steps_per_epoch} | loss {np.mean(losses[-tc['log_every']:]):.4f} "
-                      f"| lr {sched.get_last_lr()[0]:.2e} | {el / (i + 1):.2f} s/step", flush=True)
                 if wb:
                     wb.log({"train/loss": float(np.mean(losses[-tc["log_every"]:])),
                             "train/lr": sched.get_last_lr()[0]}, step=step)
 
-        val = compute_metrics(predict(model, runner, val_blocks, tc["batch_size"]))
+        bar.close()
+        val = compute_metrics(predict(model, runner, val_blocks, tc["batch_size"], desc=f"val {epoch}"))
         auc = val["model"].get("auc") or 0.0
         history.append({"epoch": epoch, "train_loss": float(np.mean(losses)), "val": val,
                         "minutes": round((time.time() - t0) / 60, 1)})
@@ -218,7 +222,7 @@ def evaluate(model, store, split, block_cfg, eval_set, batch_size, device):
     """Predictions for every student of eval_set (targets) with train students as context."""
     sampler = BlockSampler(store, block_cfg, split["train"])
     runner = Runner(store, block_cfg, device)
-    pred = predict(model, runner, sampler.evaluation(sorted(split[eval_set])), batch_size)
+    pred = predict(model, runner, sampler.evaluation(sorted(split[eval_set])), batch_size, desc=eval_set)
     return pred, compute_metrics(pred)
 
 
