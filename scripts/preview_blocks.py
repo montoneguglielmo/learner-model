@@ -38,7 +38,7 @@ def main():
     split = load_split(args.split_id, args.root)
     sampler = BlockSampler(store, BlockConfig(), split["train"])
     print(f"train: {len(sampler.train)} students, {len(sampler.targets)} can be targets "
-          f"({len(sampler.targets) // sampler.cfg.n_targets + 1} blocks per epoch)")
+          f"({-(-len(sampler.targets) // sampler.cfg.n_targets)} blocks per epoch)")
 
     t0 = time.time()
     specs = next(batches(sampler.epoch(0), args.batch_size))
