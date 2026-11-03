@@ -158,10 +158,24 @@ class SeqTransformer(nn.Module):
         block_mask = make_mask(mask_mod, B, None, L, L, device=student.device)
         flex = _compiled("flex_attention") if student.is_cuda else flex_attention
 
+        # The same-student bias is NOT a score_mod: the gradient of a learned tensor used inside
+        # score_mod is summed with atomic adds over every (query, key) pair, which made the
+        # backward pass ~100x slower. Instead it rides on extra q/k dimensions:
+        #   q' = [q, bias_h * sqrt(dh) * onehot(student)],  k' = [k, onehot(student)]
+        #   q'.k' * scale = q.k * scale + bias_h * [same student]      (scale = 1 / sqrt(dh))
+        # so it is learned through the normal (fast) attention gradient. q/k get padded to a
+        # power of 2 (FlexAttention kernels like those sizes).
+        n_students = int(student.max()) + 1
+        onehot = F.one_hot(student.clamp(min=0).long(), n_students) * valid[..., None]   # (B, L, S)
+
         def attend(q, k, v, bias):
-            def score_mod(score, bi, h, q_idx, kv_idx):
-                return score + torch.where(student[bi, q_idx] == student[bi, kv_idx], bias[h], 0.0)
-            return flex(q, k, v, score_mod=score_mod, block_mask=block_mask)
+            dh = q.shape[-1]
+            extra = max(_next_pow2(dh + n_students) - dh, n_students)
+            oh = F.pad(onehot, (0, extra - n_students)).to(q.dtype)[:, None]          # (B, 1, L, extra)
+            qb = bias.to(q.dtype)[None, :, None, None] * math.sqrt(dh) * oh
+            q2 = torch.cat([q, qb], -1)
+            k2 = torch.cat([k, oh.expand(-1, k.shape[1], -1, -1)], -1)
+            return flex(q2, k2, v, block_mask=block_mask, scale=1 / math.sqrt(dh))
         return attend
 
     # ---------------------------------------------------------------- forward
@@ -179,6 +193,10 @@ def loss_fn(logits, b):
     """Mean binary cross-entropy over the labelled tokens (EV tokens of targets)."""
     has = b["label"] >= 0
     return F.binary_cross_entropy_with_logits(logits[has].float(), b["label"][has].float())
+
+
+def _next_pow2(n):
+    return 1 << (n - 1).bit_length()
 
 
 _COMPILED = {}
