@@ -13,7 +13,7 @@ from learner_model.training.models.seq_transformer import ModelConfig, SeqTransf
 from learner_model.training.seq_transformer import TRAIN_DEFAULTS, evaluate, train
 
 BLOCK = BlockConfig(n_targets=2, n_context=3, max_events=8)
-MODEL = ModelConfig(d=32, n_layers=3, n_heads=4, dropout=0.0, max_events=8)
+MODEL = ModelConfig(d=32, n_layers=3, n_heads=2, dropout=0.0, max_events=8)  # head size 16: FlexAttention minimum
 
 
 @pytest.fixture(scope="module")

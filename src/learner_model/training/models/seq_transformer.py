@@ -83,6 +83,10 @@ class SeqTransformer(nn.Module):
         super().__init__()
         self.cfg, self.attention = cfg, attention
         d = cfg.d
+        if d % cfg.n_heads:
+            raise ValueError(f"d={d} is not a multiple of n_heads={cfg.n_heads}")
+        if attention == "flex" and d // cfg.n_heads < 16:
+            raise ValueError(f"FlexAttention on GPU needs d / n_heads >= 16, got {d // cfg.n_heads}")
         self.ex_dim = min(cfg.ex_dim or ex_dim, ex_dim)
         self.proj_ex = nn.Linear(self.ex_dim, d)
         self.unknown_ex = nn.Parameter(torch.zeros(d))
@@ -149,10 +153,10 @@ class SeqTransformer(nn.Module):
                            valid[bi, q], valid[bi, kv])
 
         B, L = student.shape
-        # _compile: on GPU the mask is built without materializing a (B, L, L) tensor
-        block_mask = create_block_mask(mask_mod, B, None, L, L, device=student.device,
-                                       _compile=student.is_cuda)
-        flex = _compiled_flex() if student.is_cuda else flex_attention
+        # compiled on GPU: the mask is built without materializing a (B, L, L) tensor
+        make_mask = _compiled("create_block_mask") if student.is_cuda else create_block_mask
+        block_mask = make_mask(mask_mod, B, None, L, L, device=student.device)
+        flex = _compiled("flex_attention") if student.is_cuda else flex_attention
 
         def attend(q, k, v, bias):
             def score_mod(score, bi, h, q_idx, kv_idx):
@@ -177,13 +181,13 @@ def loss_fn(logits, b):
     return F.binary_cross_entropy_with_logits(logits[has].float(), b["label"][has].float())
 
 
-_FLEX = None
+_COMPILED = {}
 
 
-def _compiled_flex():
-    """FlexAttention needs torch.compile to run as a fused (fast, memory-light) kernel."""
-    global _FLEX
-    if _FLEX is None:
-        from torch.nn.attention.flex_attention import flex_attention
-        _FLEX = torch.compile(flex_attention, dynamic=False)
-    return _FLEX
+def _compiled(name):
+    """FlexAttention (and its mask builder) need torch.compile to run as fused,
+    memory-light kernels. Compiled once per process."""
+    if name not in _COMPILED:
+        from torch.nn.attention import flex_attention as fa
+        _COMPILED[name] = torch.compile(getattr(fa, name), dynamic=False)
+    return _COMPILED[name]
