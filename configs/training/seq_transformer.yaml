@@ -8,7 +8,7 @@ split_id: split_students__2026-10-19__1a825a
 block:
   n_targets: 3        # students whose answers get a loss, per block
   n_context: 12       # students that are only read
-  max_events: 64      # events per student (a random window in training, the last ones in evaluation)
+  max_events: 128      # events per student (a random window in training, the last ones in evaluation)
   min_events: 2       # shorter students are never targets
   seed: 0
 
@@ -18,7 +18,7 @@ model:
   n_heads: 8
   ff_mult: 4
   dropout: 0.1
-  max_events: 64      # must be >= block.max_events
+  max_events: 128      # must be >= block.max_events
   ex_dim: null        # e.g. 256: keep the first 256 values of the exercise vector. null = all
   correct_vector: true
 
