@@ -278,6 +278,12 @@ def main():
     if not clean and not args.allow_dirty:
         raise SystemExit("Uncommitted changes: commit first (or use --allow-dirty for a test).")
     cfg, block_cfg, model_cfg, tc = load_config(args.config, args.max_epochs)
+    if args.wandb_project:
+        try:
+            import wandb  # noqa: F401
+        except ImportError:
+            raise SystemExit("--wandb-project needs wandb (uv add wandb, then wandb login), "
+                             "or run without --wandb-project")
 
     t0 = time.time()
     store = EventStore.load(cfg["events_id"], cfg["exercises_id"], args.datasets_root)
