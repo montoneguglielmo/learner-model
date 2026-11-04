@@ -18,7 +18,7 @@ model:
   n_heads: 8
   ff_mult: 4
   dropout: 0.1
-  max_events: 128      # must be >= block.max_events
+  max_events: 64      # must be >= block.max_events
   ex_dim: null        # e.g. 256: keep the first 256 values of the exercise vector. null = all
   correct_vector: true
 
@@ -27,7 +27,7 @@ train:
   lr: 3.0e-4
   weight_decay: 0.01
   warmup_steps: 1000
-  max_epochs: 40
+  max_epochs: 200
   patience: 5         # stop after this many epochs without a better val AUC
   grad_clip: 1.0
   log_every: 50       # steps between W&B logs (the progress bar updates every step)
