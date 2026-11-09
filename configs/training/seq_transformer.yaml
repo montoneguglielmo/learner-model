@@ -1,0 +1,35 @@
+# Sequence transformer (plan: "multi-student transformer for answer prediction").
+# First experiments on a 24 GB GPU. A different setting = a new config file.
+
+events_id: event_embed_v1__2026-11-03__bd60d9
+exercises_id: text_embed_v1__2026-10-19__97f653
+split_id: split_students__2026-10-19__1a825a
+
+block:
+  n_targets: 3        # students whose answers get a loss, per block
+  n_context: 12       # students that are only read
+  max_events: 128      # events per student (a random window in training, the last ones in evaluation)
+  min_events: 2       # shorter students are never targets
+  seed: 0
+
+model:
+  d: 256
+  n_layers: 6
+  n_heads: 8
+  ff_mult: 4
+  dropout: 0.1
+  max_events: 128      # must be >= block.max_events
+  ex_dim: null        # e.g. 256: keep the first 256 values of the exercise vector. null = all
+  correct_vector: true
+
+train:
+  batch_size: 16      # blocks per step
+  lr: 3.0e-4
+  weight_decay: 0.01
+  warmup_steps: 1000
+  max_epochs: 200
+  patience: 5         # stop after this many epochs without a better val AUC
+  grad_clip: 1.0
+  log_every: 50       # steps between W&B logs (the progress bar updates every step)
+  val_max_students: null   # evaluate on a subset of val students each epoch (faster). null = all
+  seed: 0

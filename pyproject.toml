@@ -18,6 +18,7 @@ dependencies = [
     "sentence-transformers>=5.7.0",
     "tabicl>=2.2.0",
     "torch>=2.14.1",
+    "wandb>=0.31.0",
 ]
 
 [project.scripts]
