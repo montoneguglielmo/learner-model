@@ -31,7 +31,7 @@ def main():
 
     ds = load_dataset_config(args.config)
     cfg = TextConfig(**ds.exercise.get("text", {}))
-    ids = list(ds.id_columns)
+    ids = list(ds.exercise_columns.exercise_id)
     exercises = pl.read_parquet(ds.exercises_path)
     print(f"dataset {ds.dataset}: {ds.exercises_path}")
     print(f"{exercises.height} rows | all columns: {exercises.columns}")

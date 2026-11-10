@@ -4,7 +4,7 @@ One dataset at a time, from its original exercise table.
 
   1. Build one clean text per exercise (exercise_text.py), with the settings
      in the "exercise: text:" part of the dataset config. An exercise is one
-     distinct combination of the config's id_columns.
+     distinct value of exercise.columns.exercise_id (one or several columns).
   2. Embed each text with a sentence-embedding model (e.g. Qwen3-Embedding).
   3. Optionally keep only the first `output_dim` values (Matryoshka models
      are trained for this), then L2-normalize.
@@ -53,7 +53,7 @@ def main():
     m = ds.exercise["model"]
     exercises_path = ds.exercises_path
     text_cfg = TextConfig(**ds.exercise.get("text", {}))
-    ids = list(ds.id_columns)
+    ids = list(ds.exercise_columns.exercise_id)
 
     # 1. Texts first: a wrong column list fails here, before loading the model.
     exercises = pl.read_parquet(exercises_path)
@@ -70,6 +70,7 @@ def main():
     # Everything that changes the RESULT goes in the config (with the exact model commit).
     config = {
         **ds.describe(),
+        "columns": ds.exercise_columns.to_dict(),
         "model": {**m, "revision": revision},
         "text": text_cfg.to_dict(),
         "limit": args.limit,
@@ -119,7 +120,7 @@ def main():
                 "full_dim": full_dim, "output_dim": dim, "prompt": prompt or None,
             },
             "dataset": ds.dataset,
-            "id_columns": ids,
+            "columns": ds.exercise_columns.to_dict(),
             "text_config": text_cfg.to_dict(),
             "stats": {
                 "n_exercises": texts.height,

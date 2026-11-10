@@ -24,18 +24,19 @@ def main():
 
     ds = load_dataset_config(args.config)
     text_cfg = EventTextConfig(**ds.event.get("text", {}))
-    roles, ids = ds.columns, ds.id_columns
+    roles = ds.event_columns
+    ids = roles.exercise_id
     events = pl.read_parquet(ds.events_path)
     print(f"dataset {ds.dataset}: {ds.events_path}")
     print(f"{events.height} events | all columns: {events.columns}")
-    cols = text_columns(events.columns, text_cfg, roles, ids)
-    print(f"roles:        {roles.to_dict()} | exercise id: {list(ids)}")
-    print(f"kept as is:   {output_columns(roles, ids, text_cfg)}")
+    cols = text_columns(events.columns, text_cfg, roles)
+    print(f"key columns:  {roles.to_dict()}")
+    print(f"kept as is:   {output_columns(roles, text_cfg)}")
     print(f"event text:   {cols['event']}")
     print(f"result text:  {cols.get('result', 'none (embed_result_columns is empty)')}")
-    print(f"not used:     {not_used(events.columns, text_cfg, roles, ids)}")
+    print(f"not used:     {not_used(events.columns, text_cfg, roles)}")
 
-    texts = build_event_texts(events, text_cfg, roles, ids)
+    texts = build_event_texts(events, text_cfg, roles)
     for kind in cols:
         t = texts[f"{kind}_text"]
         chars = t.str.len_chars()

@@ -13,7 +13,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from learner_model.common.dataset_config import Columns, load_dataset_config
+from learner_model.common.dataset_config import EventColumns, ExerciseColumns, load_dataset_config
 from learner_model.preprocessing.event_text import EventTextConfig, build_event_texts
 from learner_model.preprocessing.exercise_text import TextConfig, build_texts
 from learner_model.training.blocks import EventStore
@@ -57,8 +57,9 @@ def events():
 @pytest.mark.parametrize("path", CONFIGS)
 def test_config_loads(path):
     ds = load_dataset_config(path)
-    assert ds.id_columns == ("source", "exercise_id")
-    assert ds.columns == Columns()  # MIAAM names
+    assert ds.exercise_columns == ExerciseColumns(exercise_id=("source", "exercise_id"))
+    assert ds.event_columns == EventColumns(exercise_id=("source", "exercise_id"))  # MIAAM names
+    assert "columns" not in ds.exercise and "columns" not in ds.event
     assert ds.events_path.name == "maths_data_filtered.parquet"
     TextConfig(**ds.exercise["text"])
     EventTextConfig(**ds.event["text"])
@@ -74,6 +75,25 @@ def test_configs_use_the_same_models():
 def test_v2_event_text_has_no_module():
     ds = load_dataset_config(CONFIGS[1])
     assert "module_name" not in ds.event["text"]["embed_event_columns"]
+
+
+def test_config_exercise_id_lengths_must_match(tmp_path):
+    cfg = tmp_path / "bad.yaml"
+    cfg.write_text("dataset: bad\ndata_dir: .\nevents_file: e.parquet\nexercises_file: x.parquet\n"
+                   "exercise:\n  columns:\n    exercise_id: [source, exercise_id]\n"
+                   "event:\n  columns:\n    exercise_id: exercise_id\n")
+    with pytest.raises(ValueError, match="same length"):
+        load_dataset_config(cfg)
+
+
+def test_config_exercise_id_single_column(tmp_path):
+    cfg = tmp_path / "one.yaml"
+    cfg.write_text("dataset: one\ndata_dir: .\nevents_file: e.parquet\nexercises_file: x.parquet\n"
+                   "exercise:\n  columns:\n    exercise_id: item\n"
+                   "event:\n  columns:\n    exercise_id: item_id\n    student_id: student\n")
+    ds = load_dataset_config(cfg)
+    assert ds.exercise_columns.exercise_id == ("item",)
+    assert ds.event_columns.exercise_id == ("item_id",) and ds.event_columns.student_id == "student"
 
 
 # ------------------------------------------------------------------ exercise texts
@@ -96,13 +116,14 @@ def test_exercise_id_alone_fails_when_not_unique(exercises):
 
 # ------------------------------------------------------------------ event texts
 
-ROLES = Columns(student_id="student", timestamp="time", outcome="correct")
+ROLES = EventColumns(student_id="student", timestamp="time", outcome="correct",
+                     exercise_id=["source", "exercise_id"])
 
 
 def test_event_texts_roles(events):
     cfg = EventTextConfig(keep_columns=["work_mode"], embed_event_columns=["work_mode", "source"],
                           embed_result_columns=["correct", "data_answer"])
-    t = build_event_texts(events, cfg, ROLES, ["source", "exercise_id"])
+    t = build_event_texts(events, cfg, ROLES)
     assert t.columns == ["event_id", "student", "time", "correct", "source", "exercise_id", "work_mode",
                          "event_text", "result_text"]
     # sorted by student, then time; event_id = row number in the input
@@ -115,22 +136,23 @@ def test_event_texts_roles(events):
 def test_event_id_column(events):
     ev = events.with_columns(pl.Series("my_id", [10, 11, 12, 13, 14]))
     cfg = EventTextConfig(embed_event_columns=["work_mode"], embed_result_columns=["correct"])
-    roles = Columns(student_id="student", timestamp="time", outcome="correct", event_id="my_id")
-    t = build_event_texts(ev, cfg, roles, ["source", "exercise_id"])
+    roles = EventColumns(student_id="student", timestamp="time", outcome="correct", event_id="my_id",
+                         exercise_id=["source", "exercise_id"])
+    t = build_event_texts(ev, cfg, roles)
     assert t["event_id"].to_list() == [10, 13, 11, 12, 14]
 
 
 def test_event_texts_missing_role_column(events):
     cfg = EventTextConfig(embed_event_columns=["work_mode"], embed_result_columns=[])
     with pytest.raises(ValueError, match="not in the table"):
-        build_event_texts(events, cfg, Columns(), ["source", "exercise_id"])  # no user_id column
+        build_event_texts(events, cfg, EventColumns(exercise_id=["source", "exercise_id"]))  # no user_id
 
 
 # ------------------------------------------------------------------ exercise join in training
 
 def test_store_joins_on_all_id_columns(events, exercises):
     cfg = EventTextConfig(embed_event_columns=["work_mode"], embed_result_columns=["correct"])
-    t = build_event_texts(events, cfg, ROLES, ["source", "exercise_id"])
+    t = build_event_texts(events, cfg, ROLES)
     t = t.rename({"student": "user_id", "time": "created_at", "correct": "data_correct"})
     rng = np.random.default_rng(0)
     for col in ("event_embedding", "result_embedding"):
@@ -154,7 +176,7 @@ def test_split_per_dataset(tmp_path, monkeypatch):
                   "source": ["am"] * (3 * n)}).write_parquet(tmp_path / "events.parquet")
     cfg = tmp_path / "toy.yaml"
     cfg.write_text(f"dataset: toy\ndata_dir: {tmp_path}\nevents_file: events.parquet\n"
-                   f"exercises_file: x.parquet\nid_columns: [exercise_id]\n")
+                   f"exercises_file: x.parquet\n")
     monkeypatch.setattr(sys, "argv", ["split", "--config", str(cfg), "--root", str(tmp_path / "ds"),
                                       "--allow-dirty"])
     split.main()

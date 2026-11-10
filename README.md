@@ -15,10 +15,13 @@ and described by one config file, `configs/encoders/<dataset>.yaml`:
 | --- | --- |
 | `dataset` | name used in the output folder names (`miaam_v1`, `miaam_v2`) |
 | `data_dir`, `events_file`, `exercises_file` | where the original files are (relative to the repo root) |
-| `id_columns` | what makes an exercise unique, in both tables (MIAAM: `[source, exercise_id]`) |
-| `columns` | what the event columns are called: `student_id`, `timestamp` (orders the events, any encoding), `outcome` (boolean), `event_id` (`null` = row number) |
-| `exercise` | model and text settings of the exercise embedding |
-| `event` | model and text settings of the event and outcome embeddings |
+| `exercise.columns` | what the key column of the exercise table is called: `exercise_id`, one column or several that are unique together (MIAAM: `[source, exercise_id]`) |
+| `exercise.model`, `exercise.text` | the exercise embedding: model, columns kept and columns written into the text |
+| `event.columns` | what the key columns of the events table are called: `student_id`, `timestamp` (orders the events, any encoding), `outcome` (boolean), `exercise_id` (matched in order with the exercise one), `event_id` (`null` = row number) |
+| `event.model`, `event.text` | the event and outcome embeddings: model, columns kept and columns embedded |
+
+The key columns are always kept, with the dataset's own names. Each encoder writes them into
+its manifest, so training finds them there.
 
 All datasets must use the same models, so their vectors live in the same space
 (`tests/test_datasets.py` checks it). The columns written into the texts may differ.
@@ -45,8 +48,8 @@ The training config (`configs/training/seq_transformer.yaml`) takes their three 
 
 1. Make sure it has an exercise table and an events table with: a student id, a timestamp,
    a boolean outcome, and the exercise id columns in both tables. Prepare the files if not.
-2. Copy `configs/encoders/miaam_v2.yaml`, change `dataset`, the paths, `id_columns`, `columns`
-   and the text columns. Keep the `model` parts identical.
+2. Copy `configs/encoders/miaam_v2.yaml`, change `dataset`, the paths, the `columns` of `exercise`
+   and `event`, and the text columns. Keep the `model` parts identical.
 3. Preview the texts, then run the three steps above.
 
 ## Tests

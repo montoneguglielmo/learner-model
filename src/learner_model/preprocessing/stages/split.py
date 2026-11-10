@@ -48,7 +48,7 @@ def main():
 
     ds = load_dataset_config(args.config)
     path = ds.events_path
-    student, outcome = ds.columns.student_id, ds.columns.outcome
+    student, outcome = ds.event_columns.student_id, ds.event_columns.outcome
     group_col = args.group_col or student
     # Only settings that change the RESULT go in the config.
     config = {"dataset": ds.dataset, "events": str(path), "student_col": student, "group_col": group_col,

@@ -216,7 +216,7 @@ def not_used(columns, cfg, id_columns=("exercise_id",)):
 
 def build_texts(exercises: pl.DataFrame, cfg: TextConfig, id_columns=("exercise_id",)) -> pl.DataFrame:
     """
-    One row per exercise (distinct id_columns), with columns:
+    One row per exercise (distinct values of the id columns), with columns:
       <id columns>, <other keep columns>, parse_status, text
     An exercise listed several times keeps the first value of each keep column,
     and all the distinct values of each text column, joined with " ; ".
@@ -248,7 +248,7 @@ def build_texts(exercises: pl.DataFrame, cfg: TextConfig, id_columns=("exercise_
                 if len(r["_content"]) > 1:
                     name = ", ".join(f"{c}={r[c]}" for c in ids)
                     raise ValueError(f"exercise {name} has {len(r['_content'])} different contents. "
-                                     f"Is an id column missing from id_columns {ids}?")
+                                     f"Is a column missing from exercise.columns.exercise_id {ids}?")
                 obj, status = parse_content(r["_content"][0])
                 if obj is not None:
                     lines.extend(content_lines(obj, cfg))

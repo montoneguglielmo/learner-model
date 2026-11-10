@@ -85,8 +85,8 @@ def main():
     # Texts first: a wrong column name fails here, before loading the model.
     events = pl.read_parquet(events_path)
     print(f"Dataset {ds.dataset}: {events_path}")
-    print(f"Columns not used: {not_used(events.columns, text_cfg, ds.columns, ds.id_columns)}")
-    texts = build_event_texts(events, text_cfg, ds.columns, ds.id_columns)
+    print(f"Columns not used: {not_used(events.columns, text_cfg, ds.event_columns)}")
+    texts = build_event_texts(events, text_cfg, ds.event_columns)
     del events
     if args.limit:
         texts = texts.head(args.limit)
@@ -98,6 +98,7 @@ def main():
     # Everything that changes the RESULT goes in the config (with the exact model commit).
     config = {
         **ds.describe(),
+        "columns": ds.event_columns.to_dict(),
         "model": {**m, "revision": revision},
         "text": text_cfg.to_dict(),
         "limit": args.limit,
@@ -158,8 +159,7 @@ def main():
                 "full_dim": full_dim, "output_dim": dim, "prompt": prompt or None,
             },
             "dataset": ds.dataset,
-            "id_columns": list(ds.id_columns),
-            "columns": ds.columns.to_dict(),
+            "columns": ds.event_columns.to_dict(),
             "text_config": text_cfg.to_dict(),
             "stats": {
                 "n_events": texts.height,

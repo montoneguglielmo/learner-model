@@ -10,18 +10,12 @@ data_dir: ../MIAAM-v2/data  # relative to the repo root
 events_file: maths_data_filtered.parquet
 exercises_file: maths_exercises_table.parquet
 
-# What makes an exercise unique, in both tables. In V2 the same exercise_id is used by two
-# sources for different exercises; source + exercise_id is unique in V1 and V2.
-id_columns: [source, exercise_id]
-
-# What the event columns are called.
-columns:
-  event_id: null                      # null = row number in the events file
-  student_id: user_id
-  timestamp: created_at               # orders the events; any encoding
-  outcome: data_correct               # boolean
-
 exercise:
+  # What the key columns are called. The exercise id can be one column or several that are
+  # unique together: the same exercise_id is used by two sources for different exercises
+  # (in V2), while source + exercise_id is unique in V1 and V2.
+  columns:
+    exercise_id: [source, exercise_id]
   model:
     name: Qwen/Qwen3-Embedding-0.6B
     revision: main        # resolved to the exact commit hash at run time, saved in the manifest
@@ -37,7 +31,7 @@ exercise:
     # modules/objectives/activities, so one kept value per exercise would be misleading; their
     # names are in the text instead) and the pedagogical intents.
 
-    # Copied into the output besides the id columns (first value when an exercise is listed
+    # Copied into the output besides the key columns (first value when an exercise is listed
     # several times).
     keep_columns: [gameplay_type]
     # Written into the text, in this order. "content" is the exercise itself (parsed);
@@ -49,6 +43,13 @@ exercise:
     include_feedback_correct: false
 
 event:
+  # What the key columns are called. They are always in the output.
+  columns:
+    event_id: null                    # null = row number in the events file
+    student_id: user_id
+    timestamp: created_at             # orders the events; any encoding
+    outcome: data_correct             # boolean
+    exercise_id: [source, exercise_id]  # links an event to its exercise (same order as above)
   model:
     name: Qwen/Qwen3-Embedding-0.6B
     revision: main
@@ -60,7 +61,7 @@ event:
     prompt: null
   text:
     # Columns in no list are not used; scripts/preview_event_texts.py prints them ("not used").
-    # The columns above (student, timestamp, outcome, id_columns) are always in the output.
+    # The key columns (event.columns) are always in the output.
     # Other columns copied as they are (ids to join with other tables):
     keep_columns: [session_id, classroom_id, playlist_or_module_id]
     # V2 events have no module_id/module_name (the module is in the exercise text only);

@@ -132,18 +132,19 @@ class EventStore:
     @classmethod
     def load(cls, events_id, exercises_id, root="datasets"):
         """From the dataset folders made by event_embed and exercise_embed (of the same dataset)."""
-        roles, ev_ids = event_columns(events_id, root)
-        ex_ids_cols = exercise_id_columns(exercises_id, root)
-        if list(ev_ids) != list(ex_ids_cols):
+        roles = event_columns(events_id, root)
+        ev_ids, ex_ids_cols = list(roles.exercise_id), exercise_id_columns(exercises_id, root)
+        if len(ev_ids) != len(ex_ids_cols):
             raise ValueError(f"{events_id} links events to exercises with {ev_ids}, but {exercises_id} "
                              f"identifies exercises with {ex_ids_cols}. Use embeddings of the same dataset.")
         path = open_dataset(events_id, root) / "embeddings.parquet"
         rename = {roles.student_id: "user_id", roles.timestamp: "created_at", roles.outcome: "data_correct"}
-        cols = ["event_id", *rename, *ex_ids_cols, "event_embedding", "result_embedding"]
+        cols = ["event_id", *rename, *ev_ids, "event_embedding", "result_embedding"]
         events = pl.read_parquet(path, columns=list(dict.fromkeys(cols))).rename(
             {k: v for k, v in rename.items() if k != v})
         ex_ids, ex_matrix = load_exercise_embeddings(exercises_id, root)
-        return cls(events, ex_ids, ex_matrix, ex_ids_cols)
+        # event id columns and exercise id columns are matched in order (names may differ)
+        return cls(events, ex_ids, ex_matrix, ev_ids)
 
     def students(self, user_ids):
         """Indices (in this store) of the given students; students without events are skipped."""

@@ -4,7 +4,7 @@ import json
 
 import polars as pl
 
-from learner_model.common.dataset_config import Columns
+from learner_model.common.dataset_config import EventColumns
 from learner_model.common.datasets import MANIFEST, open_dataset
 
 
@@ -13,17 +13,18 @@ def _manifest(path):
 
 
 def exercise_id_columns(dataset_id, root="datasets"):
-    """The columns that identify an exercise in this embedding dataset.
-    Datasets made before id_columns existed (exercise_embed_v1, text_embed_v1): ["exercise_id"]."""
-    return _manifest(open_dataset(dataset_id, root)).get("id_columns", ["exercise_id"])
+    """The columns that identify an exercise in this embedding dataset
+    (exercise.columns.exercise_id of its dataset config).
+    Datasets made before the config had columns (exercise_embed_v1, text_embed_v1): ["exercise_id"]."""
+    m = _manifest(open_dataset(dataset_id, root))
+    return list((m.get("columns") or {}).get("exercise_id", ["exercise_id"]))
 
 
 def event_columns(dataset_id, root="datasets"):
-    """(Columns, id_columns) of an event embedding dataset: what the student, timestamp and
-    outcome columns are called, and which columns link an event to its exercise.
-    Datasets made before roles existed (event_embed_v1): the MIAAM names."""
-    m = _manifest(open_dataset(dataset_id, root))
-    return Columns(**m.get("columns", {})), m.get("id_columns", ["exercise_id"])
+    """EventColumns of an event embedding dataset: what the student, timestamp, outcome and
+    exercise id columns are called (event.columns of its dataset config).
+    Datasets made before the config had columns (event_embed_v1): the MIAAM names."""
+    return EventColumns(**(_manifest(open_dataset(dataset_id, root)).get("columns") or {}))
 
 
 def load_exercise_embeddings(dataset_id, root="datasets"):
@@ -31,7 +32,7 @@ def load_exercise_embeddings(dataset_id, root="datasets"):
 
     exercise_ids: list, length N. One value per exercise when the dataset has one id column
                   (e.g. "exercise_id"), a tuple of values when it has several
-                  (e.g. ("am", "1234") for id_columns [source, exercise_id]).
+                  (e.g. ("am", "1234") for exercise_id [source, exercise_id]).
     matrix:       numpy float32 array, shape (N, dim); row i belongs to exercise_ids[i]
 
     dataset_id is the folder name, e.g. "exercise_embed_miaam_v2__2026-11-12__a3f9c1".
@@ -45,14 +46,14 @@ def load_exercise_embeddings(dataset_id, root="datasets"):
 
 
 def load_event_embeddings(dataset_id, root="datasets"):
-    """Return a polars DataFrame: event_id, <role, exercise id and keep columns>,
+    """Return a polars DataFrame: event_id, <key and keep columns>,
     event_embedding, result_embedding.
 
     One row per event, sorted by student, timestamp. The embeddings are Array columns;
     df["event_embedding"].to_numpy() gives a float32 (N, dim) matrix.
     event_embedding describes the event, result_embedding what the student answered:
     use result_embedding only for past events (absent if the encoder had no result columns).
-    event_columns() says what the role columns are called.
+    event_columns() says what the key columns are called.
     dataset_id is the folder name, e.g. "event_embed_miaam_v2__2026-11-12__a3f9c1".
     """
     path = open_dataset(dataset_id, root)

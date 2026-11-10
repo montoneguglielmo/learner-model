@@ -15,9 +15,9 @@ Each text is one "column: value" line per column, in the order of the config, e.
   source: v1.0
 
 Columns (see columns.py):
-  - the role columns (student, timestamp, outcome; see common/dataset_config.py) and the
-    exercise id columns: always in the output, so training can order the events and
-    find each event's exercise
+  - the key columns (event.columns in the dataset config: student, timestamp, outcome,
+    exercise id; see common/dataset_config.py): always in the output, so training can
+    order the events and find each event's exercise
   - keep_columns: other columns copied as they are into the output
   - embed_event_columns: written into the event text
   - embed_result_columns: written into the result text (never also in the event text).
@@ -30,14 +30,14 @@ from dataclasses import asdict, dataclass, field
 
 import polars as pl
 
-from learner_model.common.dataset_config import Columns
+from learner_model.common.dataset_config import EventColumns
 from learner_model.preprocessing.columns import check_columns, unused_columns
 
 
 @dataclass
 class EventTextConfig:
     """What goes into the text. Saved in the manifest of the embedding dataset."""
-    keep_columns: list = field(default_factory=list)  # besides the role and exercise id columns
+    keep_columns: list = field(default_factory=list)  # besides the key columns
     embed_event_columns: list = field(default_factory=list)
     embed_result_columns: list = field(default_factory=lambda: ["data_correct", "data_answer"])
     include_nulls: bool = False   # True: write "column: null" instead of skipping the line
@@ -51,21 +51,21 @@ class EventTextConfig:
 KINDS = ("event", "result")  # one text and one embedding of each kind per event
 
 
-def required_columns(roles: Columns, id_columns):
+def required_columns(roles: EventColumns):
     """Columns that are always in the output, in this order."""
-    cols = [roles.student_id, roles.timestamp, roles.outcome, *id_columns]
+    cols = [roles.student_id, roles.timestamp, roles.outcome, *roles.exercise_id]
     if roles.event_id:
         cols.insert(0, roles.event_id)
     return list(dict.fromkeys(cols))
 
 
-def output_columns(roles: Columns, id_columns, cfg):
+def output_columns(roles: EventColumns, cfg):
     """Required columns, then the other keep columns."""
-    req = required_columns(roles, id_columns)
+    req = required_columns(roles)
     return req + [c for c in cfg.keep_columns if c not in req]
 
 
-def text_columns(columns, cfg, roles=Columns(), id_columns=("exercise_id",)):
+def text_columns(columns, cfg, roles=EventColumns()):
     """{"event": [...], "result": [...]}, without "result" when embed_result_columns is empty.
     Fails if the config lists do not match the table."""
     if not cfg.embed_event_columns:
@@ -73,15 +73,15 @@ def text_columns(columns, cfg, roles=Columns(), id_columns=("exercise_id",)):
     both = [c for c in cfg.embed_result_columns if c in cfg.embed_event_columns]
     if both:
         raise ValueError(f"Columns {both} are in both embed_event_columns and embed_result_columns")
-    check_columns(columns, output_columns(roles, id_columns, cfg),
+    check_columns(columns, output_columns(roles, cfg),
                   cfg.embed_event_columns + cfg.embed_result_columns)
     cols = {"event": list(cfg.embed_event_columns), "result": list(cfg.embed_result_columns)}
     return {k: v for k, v in cols.items() if v}
 
 
-def not_used(columns, cfg, roles=Columns(), id_columns=("exercise_id",)):
+def not_used(columns, cfg, roles=EventColumns()):
     """Columns of the table that are neither kept nor embedded."""
-    return unused_columns(columns, output_columns(roles, id_columns, cfg),
+    return unused_columns(columns, output_columns(roles, cfg),
                           cfg.embed_event_columns + cfg.embed_result_columns)
 
 
@@ -111,17 +111,16 @@ def _value(name, dtype, cfg):
     return s
 
 
-def build_event_texts(events: pl.DataFrame, cfg: EventTextConfig, roles=Columns(),
-                      id_columns=("exercise_id",)) -> pl.DataFrame:
+def build_event_texts(events: pl.DataFrame, cfg: EventTextConfig, roles=EventColumns()) -> pl.DataFrame:
     """
     One row per event, sorted by student, timestamp, event_id, with columns:
       event_id    roles.event_id copied, or the row number in the input table
                   (student + timestamp may not be unique)
-      <role columns, exercise id columns, other keep columns>, event_text, result_text (if any)
-    The role and id columns keep the dataset's own names.
+      <key columns, other keep columns>, event_text, result_text (if any)
+    The key columns keep the dataset's own names.
     """
-    cols = text_columns(events.columns, cfg, roles, id_columns)
-    out_cols = [c for c in output_columns(roles, id_columns, cfg) if c != "event_id"]
+    cols = text_columns(events.columns, cfg, roles)
+    out_cols = [c for c in output_columns(roles, cfg) if c != "event_id"]
     if roles.event_id:
         if events[roles.event_id].is_duplicated().any():
             raise ValueError(f"event_id column '{roles.event_id}' has duplicated values")
@@ -129,7 +128,7 @@ def build_event_texts(events: pl.DataFrame, cfg: EventTextConfig, roles=Columns(
     else:
         if "event_id" in events.columns:
             raise ValueError("The events table already has an 'event_id' column: "
-                             "set columns.event_id: event_id in the dataset config")
+                             "set event.columns.event_id: event_id in the dataset config")
         events = events.with_row_index("event_id")
     for role in ("student_id", "timestamp", "outcome"):
         n = events[getattr(roles, role)].null_count()
