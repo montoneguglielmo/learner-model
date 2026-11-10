@@ -1,0 +1,75 @@
+# Dataset MIAAM v2: where the files are, what the columns mean, how to embed.
+# Read by the split stage and by both encoders; each starts from the original files.
+#   uv run python -m learner_model.preprocessing.stages.split          --config configs/encoders/miaam_v2.yaml
+#   uv run python -m learner_model.preprocessing.encoders.exercise_embed --config configs/encoders/miaam_v2.yaml
+#   uv run python -m learner_model.preprocessing.encoders.event_embed    --config configs/encoders/miaam_v2.yaml
+# Small changes (other dim, other columns) = a new config file.
+
+dataset: miaam_v2                     # in the output folder names
+data_dir: ../MIAAM-v2/data  # relative to the repo root
+events_file: maths_data_filtered.parquet
+exercises_file: maths_exercises_table.parquet
+
+# What makes an exercise unique, in both tables. In V2 the same exercise_id is used by two
+# sources for different exercises; source + exercise_id is unique in V1 and V2.
+id_columns: [source, exercise_id]
+
+# What the event columns are called.
+columns:
+  event_id: null                      # null = row number in the events file
+  student_id: user_id
+  timestamp: created_at               # orders the events; any encoding
+  outcome: data_correct               # boolean
+
+exercise:
+  model:
+    name: Qwen/Qwen3-Embedding-0.6B
+    revision: main        # resolved to the exact commit hash at run time, saved in the manifest
+    dtype: bfloat16
+    device: cuda
+    max_length: 4096      # tokens; the longest exercise texts are about 1,000-1,500 tokens
+    batch_size: 32
+    output_dim: 1024      # all the values of the 0.6B model
+    prompt: null          # exercises are embedded as documents: no instruction
+  text:
+    # Columns in no list are not used; scripts/preview_exercise_texts.py prints them ("not used").
+    # Not used on purpose: module_id, objective_id, activity_id (an exercise can sit in several
+    # modules/objectives/activities, so one kept value per exercise would be misleading; their
+    # names are in the text instead) and the pedagogical intents.
+
+    # Copied into the output besides the id columns (first value when an exercise is listed
+    # several times).
+    keep_columns: [gameplay_type]
+    # Written into the text, in this order. "content" is the exercise itself (parsed);
+    # any other column becomes "<label> : <value>" (all its distinct values, joined with " ; ").
+    text_columns: [module_name, objective_name, activity_name, gameplay_type, content]
+    # What is taken from the content:
+    include_correct_answer: true
+    include_feedback_incorrect: true
+    include_feedback_correct: false
+
+event:
+  model:
+    name: Qwen/Qwen3-Embedding-0.6B
+    revision: main
+    dtype: bfloat16
+    device: cuda
+    max_length: 512       # tokens; event texts are short
+    batch_size: 256
+    output_dim: 256       # keep the first 256 of 1024 values (Matryoshka). null = keep all
+    prompt: null
+  text:
+    # Columns in no list are not used; scripts/preview_event_texts.py prints them ("not used").
+    # The columns above (student, timestamp, outcome, id_columns) are always in the output.
+    # Other columns copied as they are (ids to join with other tables):
+    keep_columns: [session_id, classroom_id, playlist_or_module_id]
+    # V2 events have no module_id/module_name (the module is in the exercise text only);
+    # they have objective_id and activity_id, which are not used.
+    # Written into the event text -> event_embedding (what the event is), in this order.
+    embed_event_columns: [work_mode, source, attempt_index, created_at]
+    # Written into the result text -> result_embedding (what the student answered).
+    # Never also in the event text.
+    embed_result_columns: [data_correct, data_answer, data_duration]
+    include_nulls: false
+    float_digits: 3
+    max_value_chars: 300

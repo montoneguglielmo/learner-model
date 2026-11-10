@@ -2,10 +2,13 @@
 Turn each exercise of the MIAAM exercise table into ONE clean text.
 
 Used by the exercise encoder (and later by encoders that combine image + text).
-The result has exactly one row per exercise_id.
+The result has exactly one row per exercise: per distinct combination of the id columns
+(["exercise_id"] for MIAAM V1; ["source", "exercise_id"] for V2, where the same
+exercise_id is used by two sources for different exercises).
 
 Columns (see columns.py):
-  - keep columns: copied into the output (must include exercise_id)
+  - id columns: what makes an exercise unique; always in the output
+  - keep columns: also copied into the output
   - text columns: written into the text, in the order of the config.
     "content" is parsed (see below); any other column becomes "<label> : <value>",
     with a French label for the known columns (LABELS) and the column name otherwise.
@@ -63,7 +66,7 @@ LATEX_RE = re.compile(r"\$([^$]+)\$")
 @dataclass
 class TextConfig:
     """What goes into the text. Saved in the manifest of the embedding dataset."""
-    keep_columns: list = field(default_factory=lambda: ["exercise_id", "source", "gameplay_type"])
+    keep_columns: list = field(default_factory=lambda: ["gameplay_type"])
     text_columns: list = field(default_factory=lambda: [
         "module_name", "objective_name", "activity_name", "gameplay_type", CONTENT])
     # What is taken from the content (the exercise itself):
@@ -206,25 +209,30 @@ def content_lines(obj, cfg):
 
 # ------------------------------------------------------------ main function
 
-def not_used(columns, cfg):
-    """Columns of the table that are neither kept nor in the text."""
-    return unused_columns(columns, cfg.keep_columns, cfg.text_columns)
+def not_used(columns, cfg, id_columns=("exercise_id",)):
+    """Columns of the table that are neither ids, kept, nor in the text."""
+    return unused_columns(columns, [*id_columns, *cfg.keep_columns], cfg.text_columns)
 
 
-def build_texts(exercises: pl.DataFrame, cfg: TextConfig) -> pl.DataFrame:
+def build_texts(exercises: pl.DataFrame, cfg: TextConfig, id_columns=("exercise_id",)) -> pl.DataFrame:
     """
-    One row per exercise_id, with columns:
-      <keep columns> (exercise_id, ...), parse_status, text
+    One row per exercise (distinct id_columns), with columns:
+      <id columns>, <other keep columns>, parse_status, text
     An exercise listed several times keeps the first value of each keep column,
     and all the distinct values of each text column, joined with " ; ".
     parse_status: 'json', 'python', 'failed', or None when content is not a text column.
     """
-    check_columns(exercises.columns, cfg.keep_columns, cfg.text_columns, required_keep=["exercise_id"])
+    ids = list(id_columns)
+    keep = [c for c in cfg.keep_columns if c not in ids]
+    check_columns(exercises.columns, [*ids, *keep], cfg.text_columns)
+    nulls = exercises.select(pl.any_horizontal(pl.col(ids).is_null()).sum()).item()
+    if nulls:
+        raise ValueError(f"{nulls} exercise rows have an empty id column {ids}")
     value_cols = [c for c in cfg.text_columns if c != CONTENT]
     grouped = (
-        exercises.group_by("exercise_id", maintain_order=True)
+        exercises.group_by(ids, maintain_order=True)
         .agg(
-            *[pl.col(c).first() for c in cfg.keep_columns if c != "exercise_id"],
+            *[pl.col(c).first() for c in keep],
             *([pl.col(CONTENT).unique(maintain_order=True).alias("_content")]
               if CONTENT in cfg.text_columns else []),
             *[pl.col(c).cast(pl.String).drop_nulls().unique(maintain_order=True).alias(f"_text_{c}")
@@ -238,7 +246,9 @@ def build_texts(exercises: pl.DataFrame, cfg: TextConfig) -> pl.DataFrame:
         for col in cfg.text_columns:
             if col == CONTENT:
                 if len(r["_content"]) > 1:
-                    raise ValueError(f"exercise {r['exercise_id']} has {len(r['_content'])} different contents")
+                    name = ", ".join(f"{c}={r[c]}" for c in ids)
+                    raise ValueError(f"exercise {name} has {len(r['_content'])} different contents. "
+                                     f"Is an id column missing from id_columns {ids}?")
                 obj, status = parse_content(r["_content"][0])
                 if obj is not None:
                     lines.extend(content_lines(obj, cfg))
@@ -250,7 +260,7 @@ def build_texts(exercises: pl.DataFrame, cfg: TextConfig) -> pl.DataFrame:
                     lines.append(f"{LABELS.get(col, col)} : {' ; '.join(names)}")
 
         rows.append({
-            **{c: r[c] for c in cfg.keep_columns},
+            **{c: r[c] for c in [*ids, *keep]},
             "parse_status": status,
             "text": "\n".join(lines),
         })

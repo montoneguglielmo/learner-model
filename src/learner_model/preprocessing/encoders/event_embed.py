@@ -1,12 +1,14 @@
 """
-Encoder "event_embed_v1": TWO vectors per event (one row of the interactions table),
+Encoder "event_embed": TWO vectors per event (one row of the interactions table),
 each from a short "column: value" text:
   event_embedding   from embed_event_columns (what the event is)
   result_embedding  from embed_result_columns (what the student answered);
                     not made when embed_result_columns is empty
 
+One dataset at a time, from its original events table.
+
   1. Build the two texts per event (event_text.py), with the column lists in
-     the "text" part of the config.
+     the "event: text:" part of the dataset config.
   2. Embed each text with a sentence-embedding model (e.g. Qwen3-Embedding).
      Events are done in chunks; inside a chunk, identical texts are embedded once
      (result texts repeat a lot, so they cost little).
@@ -14,21 +16,22 @@ each from a short "column: value" text:
   4. Save the result as a dataset folder, following the dataset rules.
 
 Check the texts first (no GPU):
-  uv run python scripts/preview_event_texts.py --config configs/encoders/event_qwen3_0.6b.yaml
+  uv run python scripts/preview_event_texts.py --config configs/encoders/miaam_v2.yaml
 
 Usage (from the repo root, after committing your code):
-  uv run python -m learner_model.preprocessing.encoders.event_embed_v1 \
-      --config configs/encoders/event_qwen3_0.6b.yaml
+  uv run python -m learner_model.preprocessing.encoders.event_embed \
+      --config configs/encoders/miaam_v2.yaml
 
 Quick test on 5000 events (creates a separate dataset folder, delete it after):
-  uv run python -m learner_model.preprocessing.encoders.event_embed_v1 \
-      --config configs/encoders/event_qwen3_0.6b.yaml --limit 5000 --allow-dirty
+  uv run python -m learner_model.preprocessing.encoders.event_embed \
+      --config configs/encoders/miaam_v2.yaml --limit 5000 --allow-dirty
 
 Output:
-  datasets/event_embed_v1__<date>__<commit6>/
-    embeddings.parquet   event_id, <keep columns: user_id, created_at, ...>,
+  datasets/event_embed_<dataset>__<date>__<commit6>/
+    embeddings.parquet   event_id, <student, timestamp, outcome, exercise id columns,
+                         other keep columns> (the dataset's own column names),
                          event_embedding, result_embedding (float32, L2-normalized),
-                         sorted by user_id, created_at
+                         sorted by student, timestamp
     texts.parquet        event_id, <keep columns>, event_text, result_text:
                          exactly the texts that were embedded
     manifest.json        written last
@@ -36,19 +39,18 @@ Output:
 
 import argparse
 import time
-from pathlib import Path
 
 import numpy as np
 import polars as pl
 import pyarrow.parquet as pq
-import yaml
 from tqdm import tqdm
 
+from learner_model.common.dataset_config import load_dataset_config
 from learner_model.common.datasets import DatasetWriter
 from learner_model.common.sentence_models import gpu_name, library_versions, load_model, resolve_revision
 from learner_model.preprocessing.event_text import KINDS, EventTextConfig, build_event_texts, not_used
 
-PIPELINE = "event_embed_v1"
+PIPELINE = "event_embed"
 
 
 def embed(model, docs, m, dim):
@@ -67,7 +69,7 @@ def embed(model, docs, m, dim):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", required=True, help="YAML file, e.g. configs/encoders/event_qwen3_0.6b.yaml")
+    p.add_argument("--config", required=True, help="dataset config, e.g. configs/encoders/miaam_v2.yaml")
     p.add_argument("--limit", type=int, default=None, help="only the first N events (quick tests)")
     p.add_argument("--chunk-size", type=int, default=20_000,
                    help="events per chunk (memory, and how often the progress bar moves)")
@@ -75,15 +77,16 @@ def main():
     p.add_argument("--allow-dirty", action="store_true", help="allow uncommitted changes (quick tests only)")
     args = p.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text())
-    m = cfg["model"]
-    events_path = Path(cfg["events"]).resolve()
-    text_cfg = EventTextConfig(**cfg.get("text", {}))
+    ds = load_dataset_config(args.config)
+    m = ds.event["model"]
+    events_path = ds.events_path
+    text_cfg = EventTextConfig(**ds.event.get("text", {}))
 
     # Texts first: a wrong column name fails here, before loading the model.
     events = pl.read_parquet(events_path)
-    print(f"Columns not used: {not_used(events.columns, text_cfg)}")
-    texts = build_event_texts(events, text_cfg)
+    print(f"Dataset {ds.dataset}: {events_path}")
+    print(f"Columns not used: {not_used(events.columns, text_cfg, ds.columns, ds.id_columns)}")
+    texts = build_event_texts(events, text_cfg, ds.columns, ds.id_columns)
     del events
     if args.limit:
         texts = texts.head(args.limit)
@@ -94,13 +97,12 @@ def main():
 
     # Everything that changes the RESULT goes in the config (with the exact model commit).
     config = {
-        "config_file": Path(args.config).name,
-        "events": str(events_path),
+        **ds.describe(),
         "model": {**m, "revision": revision},
         "text": text_cfg.to_dict(),
         "limit": args.limit,
     }
-    out = DatasetWriter(PIPELINE, config, root=args.root, allow_dirty=args.allow_dirty)
+    out = DatasetWriter(f"{PIPELINE}_{ds.dataset}", config, root=args.root, allow_dirty=args.allow_dirty)
     if out.reuse:
         return
 
@@ -155,6 +157,9 @@ def main():
                 "batch_size": m["batch_size"], "max_length": m["max_length"],
                 "full_dim": full_dim, "output_dim": dim, "prompt": prompt or None,
             },
+            "dataset": ds.dataset,
+            "id_columns": list(ds.id_columns),
+            "columns": ds.columns.to_dict(),
             "text_config": text_cfg.to_dict(),
             "stats": {
                 "n_events": texts.height,

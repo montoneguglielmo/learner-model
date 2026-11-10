@@ -1,60 +1,65 @@
 """
-Encoder "exercise_embed_v1": one vector per exercise, from its text.
+Encoder "exercise_embed": one vector per exercise, from its text.
+One dataset at a time, from its original exercise table.
 
   1. Build one clean text per exercise (exercise_text.py), with the settings
-     in the "text" part of the config.
+     in the "exercise: text:" part of the dataset config. An exercise is one
+     distinct combination of the config's id_columns.
   2. Embed each text with a sentence-embedding model (e.g. Qwen3-Embedding).
   3. Optionally keep only the first `output_dim` values (Matryoshka models
      are trained for this), then L2-normalize.
   4. Save the result as a dataset folder, following the dataset rules.
 
+Check the texts first (no GPU):
+  uv run python scripts/preview_exercise_texts.py --config configs/encoders/miaam_v2.yaml
+
 Usage (from the repo root, after committing your code):
-  uv run python -m learner_model.preprocessing.encoders.exercise_embed_v1 \
-      --config configs/encoders/exercise_qwen3_4b.yaml
+  uv run python -m learner_model.preprocessing.encoders.exercise_embed \
+      --config configs/encoders/miaam_v2.yaml
 
 Quick test on 50 exercises (creates a separate dataset folder, delete it after):
-  uv run python -m learner_model.preprocessing.encoders.exercise_embed_v1 \
-      --config configs/encoders/exercise_qwen3_0.6b.yaml --limit 50 --allow-dirty
+  uv run python -m learner_model.preprocessing.encoders.exercise_embed \
+      --config configs/encoders/miaam_v2.yaml --limit 50 --allow-dirty
 
 Output:
-  datasets/exercise_embed_v1__<date>__<commit6>/
-    embeddings.parquet   <keep columns: exercise_id, ...>, embedding (float32, L2-normalized)
+  datasets/exercise_embed_<dataset>__<date>__<commit6>/
+    embeddings.parquet   <id columns>, <keep columns>, embedding (float32, L2-normalized)
     texts.parquet        exactly the texts that were embedded (+ keep columns, parse_status)
     manifest.json        written last
 """
 
 import argparse
 import time
-from pathlib import Path
 
 import numpy as np
 import polars as pl
-import yaml
-
+from learner_model.common.dataset_config import load_dataset_config
 from learner_model.common.datasets import DatasetWriter
 from learner_model.common.sentence_models import gpu_name, library_versions, load_model, resolve_revision
 from learner_model.preprocessing.exercise_text import TextConfig, build_texts, not_used
 
-PIPELINE = "exercise_embed_v1"
+PIPELINE = "exercise_embed"
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", required=True, help="YAML file, e.g. configs/encoders/exercise_qwen3_4b.yaml")
+    p.add_argument("--config", required=True, help="dataset config, e.g. configs/encoders/miaam_v2.yaml")
     p.add_argument("--limit", type=int, default=None, help="only the first N exercises (quick tests)")
     p.add_argument("--root", default="datasets", help="where dataset folders are created")
     p.add_argument("--allow-dirty", action="store_true", help="allow uncommitted changes (quick tests only)")
     args = p.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text())
-    m = cfg["model"]
-    exercises_path = Path(cfg["exercises"]).resolve()
-    text_cfg = TextConfig(**cfg.get("text", {}))
+    ds = load_dataset_config(args.config)
+    m = ds.exercise["model"]
+    exercises_path = ds.exercises_path
+    text_cfg = TextConfig(**ds.exercise.get("text", {}))
+    ids = list(ds.id_columns)
 
     # 1. Texts first: a wrong column list fails here, before loading the model.
     exercises = pl.read_parquet(exercises_path)
-    print(f"Columns not used: {not_used(exercises.columns, text_cfg)}")
-    texts = build_texts(exercises, text_cfg)
+    print(f"Dataset {ds.dataset}: {exercises_path}")
+    print(f"Columns not used: {not_used(exercises.columns, text_cfg, ids)}")
+    texts = build_texts(exercises, text_cfg, ids)
     if args.limit:
         texts = texts.head(args.limit)
     print(f"{texts.height} exercise texts built")
@@ -64,13 +69,12 @@ def main():
 
     # Everything that changes the RESULT goes in the config (with the exact model commit).
     config = {
-        "config_file": Path(args.config).name,
-        "exercises": str(exercises_path),
+        **ds.describe(),
         "model": {**m, "revision": revision},
         "text": text_cfg.to_dict(),
         "limit": args.limit,
     }
-    out = DatasetWriter(PIPELINE, config, root=args.root, allow_dirty=args.allow_dirty)
+    out = DatasetWriter(f"{PIPELINE}_{ds.dataset}", config, root=args.root, allow_dirty=args.allow_dirty)
     if out.reuse:
         return
 
@@ -101,7 +105,7 @@ def main():
     emb = emb / norms
 
     # 4. Save
-    texts.select(text_cfg.keep_columns).with_columns(
+    texts.drop("parse_status", "text").with_columns(
         embedding=pl.Series(emb, dtype=pl.Array(pl.Float32, dim)),
     ).write_parquet(out.path / "embeddings.parquet")
     texts.write_parquet(out.path / "texts.parquet")
@@ -114,6 +118,8 @@ def main():
                 "batch_size": m["batch_size"], "max_length": m["max_length"],
                 "full_dim": full_dim, "output_dim": dim, "prompt": prompt or None,
             },
+            "dataset": ds.dataset,
+            "id_columns": ids,
             "text_config": text_cfg.to_dict(),
             "stats": {
                 "n_exercises": texts.height,

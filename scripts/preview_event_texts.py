@@ -3,17 +3,16 @@ Build the event texts and print some of them, to check them by eye
 before spending GPU time. Only reads and prints.
 
 Usage (from the repo root):
-  uv run python scripts/preview_event_texts.py --config configs/encoders/event_qwen3_0.6b.yaml
+  uv run python scripts/preview_event_texts.py --config configs/encoders/miaam_v2.yaml
   uv run python scripts/preview_event_texts.py --config <file> --n 10 --seed 1
 """
 
 import argparse
-from pathlib import Path
 
 import polars as pl
-import yaml
-
-from learner_model.preprocessing.event_text import EventTextConfig, build_event_texts, not_used, text_columns
+from learner_model.common.dataset_config import load_dataset_config
+from learner_model.preprocessing.event_text import (EventTextConfig, build_event_texts, not_used, output_columns,
+                                                    text_columns)
 
 
 def main():
@@ -23,17 +22,20 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text())
-    text_cfg = EventTextConfig(**cfg.get("text", {}))
-    events = pl.read_parquet(cfg["events"])
+    ds = load_dataset_config(args.config)
+    text_cfg = EventTextConfig(**ds.event.get("text", {}))
+    roles, ids = ds.columns, ds.id_columns
+    events = pl.read_parquet(ds.events_path)
+    print(f"dataset {ds.dataset}: {ds.events_path}")
     print(f"{events.height} events | all columns: {events.columns}")
-    cols = text_columns(events.columns, text_cfg)
-    print(f"kept as is:   {text_cfg.keep_columns}")
+    cols = text_columns(events.columns, text_cfg, roles, ids)
+    print(f"roles:        {roles.to_dict()} | exercise id: {list(ids)}")
+    print(f"kept as is:   {output_columns(roles, ids, text_cfg)}")
     print(f"event text:   {cols['event']}")
     print(f"result text:  {cols.get('result', 'none (embed_result_columns is empty)')}")
-    print(f"not used:     {not_used(events.columns, text_cfg)}")
+    print(f"not used:     {not_used(events.columns, text_cfg, roles, ids)}")
 
-    texts = build_event_texts(events, text_cfg)
+    texts = build_event_texts(events, text_cfg, roles, ids)
     for kind in cols:
         t = texts[f"{kind}_text"]
         chars = t.str.len_chars()
@@ -41,7 +43,8 @@ def main():
               f"max {chars.max()} | distinct texts: {t.n_unique()} of {texts.height}")
 
     for r in texts.sample(min(args.n, texts.height), seed=args.seed).iter_rows(named=True):
-        print(f"\n{'=' * 80}\nevent {r['event_id']} | user {r['user_id']} | {r['created_at']}\n{'-' * 80}")
+        print(f"\n{'=' * 80}\nevent {r['event_id']} | student {r[roles.student_id]} | {r[roles.timestamp]}"
+              f" | exercise {', '.join(str(r[c]) for c in ids)}\n{'-' * 80}")
         print(r["event_text"])
         if "result" in cols:
             print(f"{'- ' * 10}result")

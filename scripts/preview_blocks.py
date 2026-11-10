@@ -6,8 +6,8 @@ Also times how long building and collating a batch takes.
 
 Usage (from the repo root; no GPU needed):
   uv run python scripts/preview_blocks.py \
-      --events-id event_embed_v1__2026-10-30__xxxxxx \
-      --exercises-id exercise_embed_v1__2026-10-19__xxxxxx \
+      --events-id event_embed_miaam_v2__2026-11-12__xxxxxx \
+      --exercises-id exercise_embed_miaam_v2__2026-11-12__xxxxxx \
       --split-id split_students__2026-10-19__1a825a
 """
 
