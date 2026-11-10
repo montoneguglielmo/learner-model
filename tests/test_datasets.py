@@ -79,9 +79,11 @@ def test_unknown_exercise_format():
         exercise_format("other")
 
 
-def test_v2_event_text_has_no_module():
-    ds = load_dataset_config(CONFIGS[1])
-    assert "module_name" not in ds.event["text"]["embed_event_columns"]
+@pytest.mark.parametrize("path", CONFIGS)
+def test_event_texts_have_no_module(path):
+    """Neither MIAAM v1.1 nor v2.1 events have module_id/module_name."""
+    text = load_dataset_config(path).event["text"]
+    assert not {"module_id", "module_name"} & {*text["keep_columns"], *text["embed_event_columns"]}
 
 
 def test_config_exercise_id_lengths_must_match(tmp_path):
