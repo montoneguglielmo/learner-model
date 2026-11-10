@@ -56,7 +56,7 @@ import numpy as np
 import polars as pl
 
 from learner_model.common.datasets import git_info
-from learner_model.common.embeddings import load_exercise_embeddings
+from learner_model.common.embeddings import exercise_id_columns, load_exercise_embeddings
 from learner_model.common.splits import load_split
 
 PIPELINE = "tabular_per_student"
@@ -83,8 +83,8 @@ def in_bin(x, lo, hi):
 
 # ---------------------------------------------------------------- data
 
-def load_interactions(path, students, dedup):
-    cols = KEY + ["attempt_index", "data_correct", "data_duration"]
+def load_interactions(path, students, dedup, extra=()):
+    cols = list(dict.fromkeys(KEY + ["attempt_index", "data_correct", "data_duration", *extra]))
     df = (pl.scan_parquet(path)
             .select(cols)
             .filter(pl.col("user_id").is_in(list(students)))
@@ -99,7 +99,7 @@ def load_interactions(path, students, dedup):
 
 def add_features(df):
     """One row per interaction. Every feature uses only rows BEFORE the current one."""
-    u, ue = "user_id", ["user_id", "exercise_id"]
+    u, ue = "user_id", ["user_id", "_ex_key"]  # _ex_key: the exercise (all its id columns)
     ts = pl.col("created_at")
     df = df.with_columns(
         y=pl.col("data_correct").cast(pl.Int32),
@@ -271,15 +271,23 @@ def main():
     # ---- data
     split = load_split(args.split_id, args.datasets_root)
     students = split[args.set]
-    df, n_dups = load_interactions(args.interactions, students, dedup=not args.no_dedup)
+    id_cols = exercise_id_columns(args.embeddings_id, args.datasets_root)
+    df, n_dups = load_interactions(args.interactions, students, dedup=not args.no_dedup, extra=id_cols)
     print(f"{args.set} students: {len(students)} | rows: {df.height} | duplicates removed: {n_dups}")
 
     ex_ids, E = load_exercise_embeddings(args.embeddings_id, args.datasets_root)
+    # one key per exercise, also when several columns identify it (e.g. source + exercise_id)
+    if len(id_cols) > 1:
+        ex_ids = ["\x1f".join(map(str, k)) for k in ex_ids]
+        df = df.with_columns(pl.concat_str([pl.col(c).cast(pl.String) for c in id_cols],
+                                           separator="\x1f").alias("_ex_key"))
+    else:
+        df = df.with_columns(pl.col(id_cols[0]).alias("_ex_key"))
     if max(args.dims) > E.shape[1]:
         raise SystemExit(f"dim {max(args.dims)} > embedding size {E.shape[1]}")
     ex_index = {e: i for i, e in enumerate(ex_ids)}
     n_before = df.height
-    df = df.filter(pl.col("exercise_id").is_in(ex_ids))
+    df = df.filter(pl.col("_ex_key").is_in(ex_ids))
     if df.height < n_before:
         print(f"WARNING: dropped {n_before - df.height} rows with no embedding")
 
@@ -294,7 +302,7 @@ def main():
         blocks.append({
             "user_id": uid, "n": g.height,
             "F": g.select(FEATURES).to_numpy().astype(np.float32),
-            "emb_idx": np.array([ex_index[e] for e in g["exercise_id"]]),
+            "emb_idx": np.array([ex_index[e] for e in g["_ex_key"]]),
             "y": g["y"].to_numpy(), "base": g["p_baseline"].to_numpy(),
             "positions": prediction_positions(g.height, args.max_preds_per_student),
         })

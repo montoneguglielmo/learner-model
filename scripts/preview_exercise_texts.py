@@ -4,7 +4,8 @@ before spending GPU time. Only reads and prints (or writes to --out).
 
 Usage (from the repo root). The settings come from the "text" part of the config:
 copy the config to try other settings. Examples are picked per gameplay_type (keep that column).
-  uv run python scripts/preview_exercise_texts.py --config configs/encoders/exercise_qwen3_4b.yaml
+--id matches the last id column, e.g. exercise_id (all sources sharing that id are shown).
+  uv run python scripts/preview_exercise_texts.py --config configs/encoders/miaam_v2.yaml
   uv run python scripts/preview_exercise_texts.py --config <file> --n 2      # 2 examples per gameplay_type
   uv run python scripts/preview_exercise_texts.py --config <file> --type GRADUATED_RULER --n 5
   uv run python scripts/preview_exercise_texts.py --config <file> --id b266c5b4-57a5-4384-99b2-cdc4f543e522
@@ -12,17 +13,15 @@ copy the config to try other settings. Examples are picked per gameplay_type (ke
 """
 
 import argparse
-from pathlib import Path
 
 import polars as pl
-import yaml
-
-from learner_model.preprocessing.exercise_text import TextConfig, build_texts, not_used
+from learner_model.common.dataset_config import load_dataset_config
+from learner_model.preprocessing.exercise_formats import exercise_format
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--config", required=True, help="e.g. configs/encoders/exercise_qwen3_4b.yaml")
+    p.add_argument("--config", required=True, help="e.g. configs/encoders/miaam_v2.yaml")
     p.add_argument("--n", type=int, default=1, help="examples per gameplay_type")
     p.add_argument("--type", help="only this gameplay_type")
     p.add_argument("--id", help="only this exercise_id")
@@ -30,14 +29,19 @@ def main():
     p.add_argument("--out", help="write ALL texts to this file")
     args = p.parse_args()
 
-    config = yaml.safe_load(Path(args.config).read_text())
-    cfg = TextConfig(**config.get("text", {}))
-    exercises = pl.read_parquet(config["exercises"])
+    ds = load_dataset_config(args.config)
+    fmt = exercise_format(ds.exercise.get("format"))
+    cfg = fmt.TextConfig(**ds.exercise.get("text", {}))
+    ids = list(ds.exercise_columns.exercise_id)
+    exercises = pl.read_parquet(ds.exercises_path)
+    print(f"dataset {ds.dataset}: {ds.exercises_path}")
     print(f"{exercises.height} rows | all columns: {exercises.columns}")
+    print(f"exercise id: {ids}")
     print(f"in the text: {cfg.text_columns}")
     print(f"kept as is:  {cfg.keep_columns}")
-    print(f"not used:    {not_used(exercises.columns, cfg)}")
-    texts = build_texts(exercises, cfg)
+    print(f"not used:    {fmt.not_used(exercises.columns, cfg, ids)}")
+    texts = fmt.build_texts(exercises, cfg, ids)
+    name = lambda r: " / ".join(str(r[c]) for c in ids)  # noqa: E731
 
     # ---- summary
     chars = texts["text"].str.len_chars()
@@ -60,13 +64,13 @@ def main():
     if args.out:
         with open(args.out, "w") as f:
             for r in texts.iter_rows(named=True):
-                f.write(f"##### {r['exercise_id']} [{r.get('gameplay_type')}, {r.get('source')}, {r['parse_status']}]\n")
+                f.write(f"##### {name(r)} [{r.get('gameplay_type')}, {r['parse_status']}]\n")
                 f.write(r["text"] + "\n\n")
         print(f"\nAll texts written to {args.out}")
 
     # ---- examples
     if args.id:
-        sample = texts.filter(pl.col("exercise_id") == args.id)
+        sample = texts.filter(pl.col(ids[-1]) == args.id)
     else:
         pool = texts.filter(pl.col("gameplay_type") == args.type) if args.type else texts
         sample = (pool.sample(fraction=1.0, shuffle=True, seed=args.seed)
@@ -76,10 +80,10 @@ def main():
         # the Python-dict contents too, if not already shown
         if not args.type:
             sample = pl.concat([sample, texts.filter(pl.col("parse_status") != "json").head(1)]).unique(
-                "exercise_id", maintain_order=True)
+                ids, maintain_order=True)
 
     for r in sample.iter_rows(named=True):
-        print(f"\n{'=' * 80}\n{r['exercise_id']}  [{r.get('gameplay_type')}, {r.get('source')}, {r['parse_status']}]\n{'-' * 80}")
+        print(f"\n{'=' * 80}\n{name(r)}  [{r.get('gameplay_type')}, {r['parse_status']}]\n{'-' * 80}")
         print(r["text"])
 
 

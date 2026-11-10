@@ -9,9 +9,14 @@ written as tokens:
 
     [SEP] ex_1 ev_1 out_1 ex_2 ev_2 out_2 ...
 
-    ex   exercise embedding (exercise_embed_v1, joined on exercise_id)
-    ev   event embedding (event_embed_v1: what the event is, nothing from the answer)
-    out  result embedding (event_embed_v1: data_correct, data_answer, data_duration)
+    ex   exercise embedding (exercise_embed, joined on the exercise id columns, e.g.
+         [source, exercise_id])
+    ev   event embedding (event_embed: what the event is, nothing from the answer)
+    out  result embedding (event_embed: data_correct, data_answer, data_duration)
+
+Inside the store the student, timestamp and outcome columns are called user_id,
+created_at and data_correct, whatever their names in the dataset (EventStore.load
+renames them from the encoder's manifest).
 
 Context students come first, then targets. Who may attend to whom is decided by the
 mask (block_mask.py), not by this order. The label of event t of a target sits on its
@@ -36,7 +41,7 @@ import numpy as np
 import polars as pl
 
 from learner_model.common.datasets import open_dataset
-from learner_model.common.embeddings import load_exercise_embeddings
+from learner_model.common.embeddings import event_columns, exercise_id_columns, load_exercise_embeddings
 
 # token kinds
 PAD, SEP, EX, EV, OUT = -1, 0, 1, 2, 3
@@ -73,10 +78,13 @@ class EventStore:
     Per student: rows start[k] .. start[k] + length[k] - 1, student id users[k].
     """
 
-    def __init__(self, events: pl.DataFrame, exercise_ids, exercise_matrix):
-        """events: event_id, user_id, created_at, exercise_id, data_correct,
-        event_embedding, result_embedding (as written by event_embed_v1)."""
-        missing = [c for c in ORDER + ["exercise_id", "data_correct", "event_embedding", "result_embedding"]
+    def __init__(self, events: pl.DataFrame, exercise_ids, exercise_matrix, id_columns=("exercise_id",)):
+        """events: event_id, user_id, created_at, data_correct, <id_columns>,
+        event_embedding, result_embedding.
+        exercise_ids[i] is the id of exercise_matrix row i: one value with one id column,
+        a tuple (in id_columns order) with several."""
+        id_columns = list(id_columns)
+        missing = [c for c in ORDER + id_columns + ["data_correct", "event_embedding", "result_embedding"]
                    if c not in events.columns]
         if missing:
             raise ValueError(f"Event table has no column {missing}. data_correct must be in the "
@@ -94,7 +102,9 @@ class EventStore:
 
         ex_pos = {e: i for i, e in enumerate(exercise_ids)}
         self.ex_matrix = np.asarray(exercise_matrix, dtype=np.float16)
-        self.ex_row = np.array([ex_pos.get(e, -1) for e in events["exercise_id"].to_list()], dtype=np.int32)
+        ev_keys = (events[id_columns[0]].to_list() if len(id_columns) == 1
+                   else list(events.select(id_columns).iter_rows()))
+        self.ex_row = np.array([ex_pos.get(e, -1) for e in ev_keys], dtype=np.int32)
         self.n_unknown_exercises = int((self.ex_row < 0).sum())
 
         y = pl.col("data_correct").cast(pl.Int32)
@@ -121,12 +131,20 @@ class EventStore:
 
     @classmethod
     def load(cls, events_id, exercises_id, root="datasets"):
-        """From the dataset folders made by event_embed_v1 and exercise_embed_v1."""
+        """From the dataset folders made by event_embed and exercise_embed (of the same dataset)."""
+        roles = event_columns(events_id, root)
+        ev_ids, ex_ids_cols = list(roles.exercise_id), exercise_id_columns(exercises_id, root)
+        if len(ev_ids) != len(ex_ids_cols):
+            raise ValueError(f"{events_id} links events to exercises with {ev_ids}, but {exercises_id} "
+                             f"identifies exercises with {ex_ids_cols}. Use embeddings of the same dataset.")
         path = open_dataset(events_id, root) / "embeddings.parquet"
-        cols = ORDER + ["exercise_id", "data_correct", "event_embedding", "result_embedding"]
-        events = pl.read_parquet(path, columns=cols)
+        rename = {roles.student_id: "user_id", roles.timestamp: "created_at", roles.outcome: "data_correct"}
+        cols = ["event_id", *rename, *ev_ids, "event_embedding", "result_embedding"]
+        events = pl.read_parquet(path, columns=list(dict.fromkeys(cols))).rename(
+            {k: v for k, v in rename.items() if k != v})
         ex_ids, ex_matrix = load_exercise_embeddings(exercises_id, root)
-        return cls(events, ex_ids, ex_matrix)
+        # event id columns and exercise id columns are matched in order (names may differ)
+        return cls(events, ex_ids, ex_matrix, ev_ids)
 
     def students(self, user_ids):
         """Indices (in this store) of the given students; students without events are skipped."""

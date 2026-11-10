@@ -1,4 +1,4 @@
-"""Sentence-embedding model helpers shared by the encoders (exercise_embed_v1, event_embed_v1)."""
+"""Sentence-embedding model helpers shared by the encoders (exercise_embed, event_embed)."""
 
 import importlib.metadata as md
 
