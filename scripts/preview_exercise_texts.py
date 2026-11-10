@@ -16,7 +16,7 @@ import argparse
 
 import polars as pl
 from learner_model.common.dataset_config import load_dataset_config
-from learner_model.preprocessing.exercise_text import TextConfig, build_texts, not_used
+from learner_model.preprocessing.exercise_formats import exercise_format
 
 
 def main():
@@ -30,7 +30,8 @@ def main():
     args = p.parse_args()
 
     ds = load_dataset_config(args.config)
-    cfg = TextConfig(**ds.exercise.get("text", {}))
+    fmt = exercise_format(ds.exercise.get("format"))
+    cfg = fmt.TextConfig(**ds.exercise.get("text", {}))
     ids = list(ds.exercise_columns.exercise_id)
     exercises = pl.read_parquet(ds.exercises_path)
     print(f"dataset {ds.dataset}: {ds.exercises_path}")
@@ -38,8 +39,8 @@ def main():
     print(f"exercise id: {ids}")
     print(f"in the text: {cfg.text_columns}")
     print(f"kept as is:  {cfg.keep_columns}")
-    print(f"not used:    {not_used(exercises.columns, cfg, ids)}")
-    texts = build_texts(exercises, cfg, ids)
+    print(f"not used:    {fmt.not_used(exercises.columns, cfg, ids)}")
+    texts = fmt.build_texts(exercises, cfg, ids)
     name = lambda r: " / ".join(str(r[c]) for c in ids)  # noqa: E731
 
     # ---- summary

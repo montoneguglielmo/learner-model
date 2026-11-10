@@ -2,7 +2,8 @@
 Encoder "exercise_embed": one vector per exercise, from its text.
 One dataset at a time, from its original exercise table.
 
-  1. Build one clean text per exercise (exercise_text.py), with the settings
+  1. Build one clean text per exercise, with the builder of exercise.format
+     (exercise_formats.py; MIAAM: miaam/exercise_text.py) and the settings
      in the "exercise: text:" part of the dataset config. An exercise is one
      distinct value of exercise.columns.exercise_id (one or several columns).
   2. Embed each text with a sentence-embedding model (e.g. Qwen3-Embedding).
@@ -36,7 +37,7 @@ import polars as pl
 from learner_model.common.dataset_config import load_dataset_config
 from learner_model.common.datasets import DatasetWriter
 from learner_model.common.sentence_models import gpu_name, library_versions, load_model, resolve_revision
-from learner_model.preprocessing.exercise_text import TextConfig, build_texts, not_used
+from learner_model.preprocessing.exercise_formats import exercise_format
 
 PIPELINE = "exercise_embed"
 
@@ -52,14 +53,15 @@ def main():
     ds = load_dataset_config(args.config)
     m = ds.exercise["model"]
     exercises_path = ds.exercises_path
-    text_cfg = TextConfig(**ds.exercise.get("text", {}))
+    fmt = exercise_format(ds.exercise.get("format"))
+    text_cfg = fmt.TextConfig(**ds.exercise.get("text", {}))
     ids = list(ds.exercise_columns.exercise_id)
 
     # 1. Texts first: a wrong column list fails here, before loading the model.
     exercises = pl.read_parquet(exercises_path)
     print(f"Dataset {ds.dataset}: {exercises_path}")
-    print(f"Columns not used: {not_used(exercises.columns, text_cfg, ids)}")
-    texts = build_texts(exercises, text_cfg, ids)
+    print(f"Columns not used: {fmt.not_used(exercises.columns, text_cfg, ids)}")
+    texts = fmt.build_texts(exercises, text_cfg, ids)
     if args.limit:
         texts = texts.head(args.limit)
     print(f"{texts.height} exercise texts built")
@@ -72,6 +74,7 @@ def main():
         **ds.describe(),
         "columns": ds.exercise_columns.to_dict(),
         "model": {**m, "revision": revision},
+        "format": ds.exercise["format"],
         "text": text_cfg.to_dict(),
         "limit": args.limit,
     }
@@ -121,6 +124,7 @@ def main():
             },
             "dataset": ds.dataset,
             "columns": ds.exercise_columns.to_dict(),
+            "format": ds.exercise["format"],
             "text_config": text_cfg.to_dict(),
             "stats": {
                 "n_exercises": texts.height,

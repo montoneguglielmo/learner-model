@@ -14,8 +14,9 @@ import polars as pl
 import pytest
 
 from learner_model.common.dataset_config import EventColumns, ExerciseColumns, load_dataset_config
+from learner_model.preprocessing.exercise_formats import exercise_format
 from learner_model.preprocessing.event_text import EventTextConfig, build_event_texts
-from learner_model.preprocessing.exercise_text import TextConfig, build_texts
+from learner_model.preprocessing.miaam.exercise_text import TextConfig, build_texts
 from learner_model.training.blocks import EventStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,7 +62,8 @@ def test_config_loads(path):
     assert ds.event_columns == EventColumns(exercise_id=("source", "exercise_id"))  # MIAAM names
     assert "columns" not in ds.exercise and "columns" not in ds.event
     assert ds.events_path.name == "maths_data_filtered.parquet"
-    TextConfig(**ds.exercise["text"])
+    fmt = exercise_format(ds.exercise["format"])
+    fmt.TextConfig(**ds.exercise["text"])
     EventTextConfig(**ds.event["text"])
 
 
@@ -70,6 +72,11 @@ def test_configs_use_the_same_models():
     v1, v2 = (load_dataset_config(p) for p in CONFIGS)
     for part in ("exercise", "event"):
         assert getattr(v1, part)["model"] == getattr(v2, part)["model"], part
+
+
+def test_unknown_exercise_format():
+    with pytest.raises(ValueError, match="Unknown exercise format"):
+        exercise_format("other")
 
 
 def test_v2_event_text_has_no_module():

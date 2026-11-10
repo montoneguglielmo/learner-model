@@ -16,6 +16,9 @@ exercise:
   # (in V2), while source + exercise_id is unique in V1 and V2.
   columns:
     exercise_id: [source, exercise_id]
+  # How an exercise becomes a text: preprocessing/miaam/exercise_text.py parses the MIAAM
+  # "content" JSON. The "text" settings below belong to this format.
+  format: miaam
   model:
     name: Qwen/Qwen3-Embedding-0.6B
     revision: main        # resolved to the exact commit hash at run time, saved in the manifest
@@ -37,7 +40,7 @@ exercise:
     # Written into the text, in this order. "content" is the exercise itself (parsed);
     # any other column becomes "<label> : <value>" (all its distinct values, joined with " ; ").
     text_columns: [module_name, objective_name, activity_name, gameplay_type, content]
-    # What is taken from the content:
+    # What is taken from the content (the MIAAM content JSON):
     include_correct_answer: true
     include_feedback_incorrect: true
     include_feedback_correct: false

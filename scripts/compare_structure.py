@@ -8,7 +8,7 @@ For each file it shows:
   - per common column: empty (null) share and number of distinct values in A and B
   - for columns with few values (source, work_mode, gameplay_type, ...): values only in A / only in B
   - whether the ids are unique on their own or only together with `source`
-  - for the exercise table: whether `content` parses the same way (JSON keys used by exercise_text.py)
+  - for the exercise table: whether `content` parses the same way (JSON keys used by miaam/exercise_text.py)
 
 Usage (from the repo root):
   uv run python scripts/compare_structure.py ../MIAAM/data ../MIAAM-V2/data
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import polars as pl
 
-from learner_model.preprocessing.exercise_text import parse_content
+from learner_model.preprocessing.miaam.exercise_text import parse_content
 
 FILES = ["maths_data_filtered.parquet", "maths_exercises_table.parquet"]
 FEW_VALUES = 30  # columns with at most this many distinct values get their values compared

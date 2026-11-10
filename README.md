@@ -16,7 +16,8 @@ and described by one config file, `configs/encoders/<dataset>.yaml`:
 | `dataset` | name used in the output folder names (`miaam_v1`, `miaam_v2`) |
 | `data_dir`, `events_file`, `exercises_file` | where the original files are (relative to the repo root) |
 | `exercise.columns` | what the key column of the exercise table is called: `exercise_id`, one column or several that are unique together (MIAAM: `[source, exercise_id]`) |
-| `exercise.model`, `exercise.text` | the exercise embedding: model, columns kept and columns written into the text |
+| `exercise.format` | how an exercise becomes a text (`miaam`: parses the MIAAM `content` JSON, `preprocessing/miaam/exercise_text.py`) |
+| `exercise.model`, `exercise.text` | the exercise embedding: model, columns kept, columns written into the text, and the settings of the format |
 | `event.columns` | what the key columns of the events table are called: `student_id`, `timestamp` (orders the events, any encoding), `outcome` (boolean), `exercise_id` (matched in order with the exercise one), `event_id` (`null` = row number) |
 | `event.model`, `event.text` | the event and outcome embeddings: model, columns kept and columns embedded |
 
@@ -50,6 +51,9 @@ The training config (`configs/training/seq_transformer.yaml`) takes their three 
    a boolean outcome, and the exercise id columns in both tables. Prepare the files if not.
 2. Copy `configs/encoders/miaam_v2.yaml`, change `dataset`, the paths, the `columns` of `exercise`
    and `event`, and the text columns. Keep the `model` parts identical.
+   If its exercises are not in the MIAAM format, write `preprocessing/<name>/exercise_text.py`
+   (same functions as the MIAAM one), add it to `preprocessing/exercise_formats.py` and set
+   `exercise.format: <name>`. The encoders do not change.
 3. Preview the texts, then run the three steps above.
 
 ## Tests

@@ -14,6 +14,7 @@ none of them reads another one's output.
     exercise:
       columns:
         exercise_id: [source, exercise_id]  # one column, or several that together are unique
+      format: miaam                         # text builder (preprocessing/exercise_formats.py)
       model: {...}
       text: {keep_columns: [...], text_columns: [...], ...}
     event:
@@ -86,7 +87,7 @@ class DatasetConfig:
     exercises_path: Path
     exercise_columns: ExerciseColumns
     event_columns: EventColumns
-    exercise: dict          # {"model": ..., "text": ...}
+    exercise: dict          # {"format": ..., "model": ..., "text": ...}
     event: dict             # {"model": ..., "text": ...}
 
     def describe(self):
