@@ -70,7 +70,9 @@ event:
     # V2 events have no module_id/module_name (the module is in the exercise text only);
     # they have objective_id and activity_id, which are not used.
     # Written into the event text -> event_embedding (what the event is), in this order.
-    embed_event_columns: [work_mode, source, attempt_index, created_at]
+    # No created_at: V2 times are rebuilt (year 2000, login day + elapsed time), so the date
+    # means nothing in a text. Order and time gaps come from the timestamp column.
+    embed_event_columns: [work_mode, source, attempt_index]
     # Written into the result text -> result_embedding (what the student answered).
     # Never also in the event text.
     embed_result_columns: [data_correct, data_answer, data_duration]
