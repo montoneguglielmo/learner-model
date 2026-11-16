@@ -21,8 +21,8 @@ import numpy as np
 import torch
 from torch._dynamo.utils import counters
 
-from learner_model.common.splits import load_split
-from learner_model.training.blocks import BlockSampler, EventStore, batches
+from learner_model.training.blocks import batches
+from learner_model.training.multi import MultiSampler, dataset_entries, load_datasets
 from learner_model.training.models.seq_transformer import SeqTransformer, loss_fn, to_tensors
 from learner_model.training.seq_transformer import Runner, load_config, make_optimizer
 
@@ -36,10 +36,10 @@ def main():
     args = p.parse_args()
 
     cfg, block_cfg, model_cfg, tc = load_config(args.config)
-    store = EventStore.load(cfg["events_id"], cfg["exercises_id"], args.datasets_root)
-    split = load_split(cfg["split_id"], args.datasets_root)
-    sampler = BlockSampler(store, block_cfg, split["train"])
-    runner = Runner(store, block_cfg, "cuda")
+    stores, splits, fractions = load_datasets(dataset_entries(cfg), args.datasets_root)
+    sampler = MultiSampler(stores, splits, block_cfg, fractions)
+    runner = Runner(sampler, block_cfg, "cuda")
+    store = next(iter(stores.values()))
     model = SeqTransformer(model_cfg, store.ex_dim, store.ev_dim, store.res_dim, "flex").cuda()
     opt = make_optimizer(model, tc["lr"], tc["weight_decay"])
     print(f"GPU: {torch.cuda.get_device_name()} | block length {runner.length} tokens | "

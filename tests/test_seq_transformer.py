@@ -109,13 +109,14 @@ def test_options(store):
 
 def test_train_and_evaluate(store, tmp_path):
     users = store.users
-    split = {"train": users[:28], "val": users[28:34], "test": users[34:]}
+    split = {"train": set(users[:28]), "val": set(users[28:34]), "test": set(users[34:])}
+    stores, splits = {store.name: store}, {store.name: split}
     tc = {**TRAIN_DEFAULTS, "batch_size": 4, "warmup_steps": 2, "max_epochs": 2, "log_every": 1}
-    model, history = train(store, split, BLOCK, MODEL, tc, tmp_path, device="cpu", attention="dense")
+    model, history = train(stores, splits, BLOCK, MODEL, tc, tmp_path, device="cpu", attention="dense")
     assert len(history) == 2 and (tmp_path / "model.pt").exists()
     assert all(np.isfinite(h["train_loss"]) for h in history)
 
-    pred, metrics = evaluate(model, store, split, BLOCK, "val", 4, "cpu")
+    pred, metrics = evaluate(model, stores, splits, BLOCK, "val", 4, "cpu")
     # every val student with >= min_events events: its last max_events events
     expected = sum(min(store.length[k], BLOCK.max_events) for k in store.students(split["val"])
                    if store.length[k] >= BLOCK.min_events)
@@ -124,3 +125,5 @@ def test_train_and_evaluate(store, tmp_path):
     assert pred["p_model"].is_between(0, 1).all()
     assert metrics["model"]["n"] == pred.filter(pred["n_past"] >= 1).height
     assert "auc" in metrics["baseline"] and "1-9" in metrics["by_history"]
+    assert list(metrics["by_group"]) == ["dataset/dataset"]  # no source column: one group
+    assert set(pred["dataset"].unique()) == {"dataset"}

@@ -41,7 +41,8 @@ import numpy as np
 import polars as pl
 
 from learner_model.common.datasets import open_dataset
-from learner_model.common.embeddings import event_columns, exercise_id_columns, load_exercise_embeddings
+from learner_model.common.embeddings import (dataset_name, event_columns, exercise_id_columns,
+                                             load_exercise_embeddings)
 
 # token kinds
 PAD, SEP, EX, EV, OUT = -1, 0, 1, 2, 3
@@ -75,14 +76,20 @@ class EventStore:
       event_id[i]     id of the event in the encoder output (for predictions)
       n_past[i]       number of earlier events of the same student (whole history)
       p_baseline[i]   smoothed success rate so far: (correct before + 1) / (n_past + 2)
-    Per student: rows start[k] .. start[k] + length[k] - 1, student id users[k].
+    Per student: rows start[k] .. start[k] + length[k] - 1, student id users[k],
+    source sources[k] (one source per student).
+    name: the dataset name (from the encoder manifest), used in predictions and metrics.
     """
 
-    def __init__(self, events: pl.DataFrame, exercise_ids, exercise_matrix, id_columns=("exercise_id",)):
+    def __init__(self, events: pl.DataFrame, exercise_ids, exercise_matrix, id_columns=("exercise_id",),
+                 source_column=None, name="dataset"):
         """events: event_id, user_id, created_at, data_correct, <id_columns>,
-        event_embedding, result_embedding.
+        event_embedding, result_embedding (+ source_column).
         exercise_ids[i] is the id of exercise_matrix row i: one value with one id column,
-        a tuple (in id_columns order) with several."""
+        a tuple (in id_columns order) with several.
+        source_column: the column saying where each event comes from (e.g. "source"). None: the
+        whole table is one source, named after the dataset."""
+        self.name = name
         id_columns = list(id_columns)
         missing = [c for c in ORDER + id_columns + ["data_correct", "event_embedding", "result_embedding"]
                    if c not in events.columns]
@@ -126,29 +133,63 @@ class EventStore:
         self.length = runs["len"].to_numpy().astype(np.int64)
         self.start = np.concatenate([[0], np.cumsum(self.length)[:-1]]).astype(np.int64)
         self.index = {u: k for k, u in enumerate(self.users)}
+        self.sources = _student_sources(events, source_column, name, len(self.users))
 
         self.ev_dim, self.res_dim, self.ex_dim = self.ev.shape[1], self.res.shape[1], self.ex_matrix.shape[1]
 
     @classmethod
-    def load(cls, events_id, exercises_id, root="datasets"):
-        """From the dataset folders made by event_embed and exercise_embed (of the same dataset)."""
+    def load(cls, events_id, exercises_id, root="datasets", sources=None, source_column="source"):
+        """From the dataset folders made by event_embed and exercise_embed (of the same dataset).
+        sources: keep only the events of these sources (values of source_column); None = all.
+        source_column: None, or absent from the table without `sources`: one source, the dataset."""
         roles = event_columns(events_id, root)
         ev_ids, ex_ids_cols = list(roles.exercise_id), exercise_id_columns(exercises_id, root)
         if len(ev_ids) != len(ex_ids_cols):
             raise ValueError(f"{events_id} links events to exercises with {ev_ids}, but {exercises_id} "
                              f"identifies exercises with {ex_ids_cols}. Use embeddings of the same dataset.")
+        name = dataset_name(events_id, root)
+        ex_name = dataset_name(exercises_id, root, default=name)
+        if ex_name != name:
+            raise ValueError(f"{events_id} is dataset '{name}' but {exercises_id} is '{ex_name}'")
         path = open_dataset(events_id, root) / "embeddings.parquet"
+        available = pl.read_parquet_schema(path)
+        if source_column and source_column not in available:
+            if sources:
+                raise ValueError(f"{events_id} has no column '{source_column}' to select sources {sources}")
+            source_column = None
         rename = {roles.student_id: "user_id", roles.timestamp: "created_at", roles.outcome: "data_correct"}
-        cols = ["event_id", *rename, *ev_ids, "event_embedding", "result_embedding"]
-        events = pl.read_parquet(path, columns=list(dict.fromkeys(cols))).rename(
-            {k: v for k, v in rename.items() if k != v})
+        cols = ["event_id", *rename, *ev_ids, *([source_column] if source_column else []),
+                "event_embedding", "result_embedding"]
+        lf = pl.scan_parquet(path).select(list(dict.fromkeys(cols)))
+        if sources:
+            missing = sorted(set(sources) - set(
+                pl.scan_parquet(path).select(pl.col(source_column).unique()).collect()[source_column]))
+            if missing:
+                raise ValueError(f"{events_id} has no events with {source_column} in {missing}")
+            lf = lf.filter(pl.col(source_column).is_in(list(sources)))
+        events = lf.collect().rename({k: v for k, v in rename.items() if k != v})
         ex_ids, ex_matrix = load_exercise_embeddings(exercises_id, root)
         # event id columns and exercise id columns are matched in order (names may differ)
-        return cls(events, ex_ids, ex_matrix, ev_ids)
+        return cls(events, ex_ids, ex_matrix, ev_ids,
+                   source_column=rename.get(source_column, source_column), name=name)
 
     def students(self, user_ids):
         """Indices (in this store) of the given students; students without events are skipped."""
         return np.array(sorted(self.index[u] for u in user_ids if u in self.index), dtype=np.int64)
+
+
+def _student_sources(events, source_column, name, n_students):
+    """One source per student, in the store's student order."""
+    if not source_column:
+        return [name] * n_students
+    per = events.group_by("user_id", maintain_order=True).agg(
+        pl.col(source_column).first().cast(pl.String).alias("s"),
+        pl.col(source_column).n_unique().alias("n"))
+    mixed = per.filter(pl.col("n") > 1)
+    if mixed.height:
+        raise ValueError(f"{mixed.height} students have events from several sources "
+                         f"(e.g. {mixed['user_id'][0]}): blocks need one source per student")
+    return per["s"].to_list()  # events are sorted by user_id, so same order as users
 
 
 def _matrix(col):

@@ -12,6 +12,13 @@ def _manifest(path):
     return json.loads((path / MANIFEST).read_text())
 
 
+def dataset_name(dataset_id, root="datasets", default=None):
+    """The dataset an encoder or split output was made from (e.g. "miaam_v2"). Older folders
+    without it: `default`, else the folder name."""
+    m = _manifest(open_dataset(dataset_id, root))
+    return m.get("dataset") or (m.get("config") or {}).get("dataset") or default or dataset_id
+
+
 def exercise_id_columns(dataset_id, root="datasets"):
     """The columns that identify an exercise in this embedding dataset
     (exercise.columns.exercise_id of its dataset config).

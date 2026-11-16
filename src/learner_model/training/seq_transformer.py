@@ -1,7 +1,8 @@
 """Train and evaluate the sequence transformer (plan: "multi-student transformer for answer prediction").
 
-Each training block = n_targets target students + n_context context students, all from the
-train set (blocks.py). The loss is the binary cross-entropy at every event of every target.
+Training can use several datasets (multi.py): each block = n_targets target students +
+n_context context students, all from the train set of ONE (dataset, source) group (blocks.py);
+batches mix groups. The loss is the binary cross-entropy at every event of every target.
 After each epoch the model is scored on val blocks (val students as targets, train students
 as context, their last max_events events); the best epoch (val AUC) is kept, and training
 stops after `patience` epochs without improvement.
@@ -9,7 +10,8 @@ stops after `patience` epochs without improvement.
 At the end the best model predicts every event in the last max_events events of each student
 of --eval-set (default val; keep test for the final run), and is compared with the smoothed
 success-rate baseline on exactly the same events. Metrics count events with at least one
-earlier event of the same student (as in tabular_per_student), overall and by history length.
+earlier event of the same student (as in tabular_per_student), overall, by history length,
+and per (dataset, source) group. Early stopping uses the overall val AUC.
 
 Usage (from the repo root, code committed):
   # quick check that everything runs: 2 short epochs
@@ -25,9 +27,10 @@ Output:
     config.json          all settings + dataset ids + git commit + library versions
     model.pt             best model (state_dict + model config)
     history.json         train loss and val metrics per epoch
-    predictions.parquet  one row per prediction: user_id, event_id, n_past, y, p_model, p_baseline
-    metrics.json         AUC / log-loss / accuracy / accuracy_1 / accuracy_0, overall and by
-                         history length, model and baseline (written last)
+    predictions.parquet  one row per prediction: dataset, source, user_id, event_id, n_past, y,
+                         p_model, p_baseline
+    metrics.json         AUC / log-loss / accuracy / accuracy_1 / accuracy_0, overall, by
+                         history length and per group, model and baseline (written last)
 """
 
 import argparse
@@ -45,9 +48,8 @@ import yaml
 from tqdm import tqdm
 
 from learner_model.common.datasets import git_info
-from learner_model.common.splits import load_split
-from learner_model.training.blocks import (BlockConfig, BlockSampler, EventStore, batches, build_block,
-                                           collate, max_tokens)
+from learner_model.training.blocks import BlockConfig, batches, build_block, collate, max_tokens
+from learner_model.training.multi import MultiSampler, dataset_entries, load_datasets
 from learner_model.training.models.seq_transformer import ModelConfig, SeqTransformer, loss_fn, to_tensors
 from learner_model.training.tabular_per_student import HISTORY_BINS, bin_label, in_bin, score
 
@@ -61,16 +63,16 @@ TRAIN_DEFAULTS = {"batch_size": 16, "lr": 3e-4, "weight_decay": 0.01, "warmup_st
 # ---------------------------------------------------------------- prediction and metrics
 
 class Runner:
-    """Builds fixed-size batches from block specs and runs the model on them."""
+    """Builds fixed-size batches from block specs (GroupBlock) and runs the model on them."""
 
-    def __init__(self, store, block_cfg, device):
-        self.store, self.device = store, device
+    def __init__(self, sampler: MultiSampler, block_cfg, device):
+        self.groups, self.device = sampler.groups, device
         self.length = max_tokens(block_cfg)
         self.n_events = (block_cfg.n_targets + block_cfg.n_context) * block_cfg.max_events
         self.autocast = torch.autocast("cuda", dtype=torch.bfloat16, enabled=device.startswith("cuda"))
 
     def batch(self, specs):
-        blocks = [build_block(self.store, w) for w in specs]
+        blocks = [build_block(self.groups[s.group].store, s.windows) for s in specs]
         return collate(blocks, length=self.length, n_events=self.n_events)
 
 
@@ -79,46 +81,56 @@ def predict(model, runner, blocks, batch_size, desc="predict"):
     """One row per labelled token (EV token of a target)."""
     model.eval()
     blocks = list(blocks)
-    store, cols = runner.store, {"rows": [], "p": []}
+    parts = []
     for specs in tqdm(batches(blocks, batch_size), total=-(-len(blocks) // batch_size), desc=desc,
                       unit="batch", leave=False):
         batch = runner.batch(specs)
         b = to_tensors(batch, runner.device)
         with runner.autocast:
             p = torch.sigmoid(model(b).float()).cpu().numpy()
-        has = batch["label"] >= 0
-        cols["rows"].append(np.take_along_axis(batch["rows"], np.maximum(batch["event"], 0), 1)[has])
-        cols["p"].append(p[has])
-    rows = np.concatenate(cols["rows"])
-    return pl.DataFrame({
-        "user_id": [store.users[k] for k in np.searchsorted(store.start, rows, side="right") - 1],
-        "event_id": store.event_id[rows], "n_past": store.n_past[rows],
-        "y": store.correct[rows].astype(np.int32),
-        "p_model": np.concatenate(cols["p"]), "p_baseline": store.p_baseline[rows],
-    })
+        for i, spec in enumerate(specs):
+            g = runner.groups[spec.group]
+            store, has = g.store, batch["label"][i] >= 0
+            rows = batch["rows"][i][np.maximum(batch["event"][i], 0)][has]
+            parts.append(pl.DataFrame({
+                "dataset": [g.dataset] * len(rows), "source": [g.source] * len(rows),
+                "user_id": [str(store.users[k]) for k in np.searchsorted(store.start, rows, side="right") - 1],
+                "event_id": store.event_id[rows].astype(np.int64), "n_past": store.n_past[rows].astype(np.int64),
+                "y": store.correct[rows].astype(np.int32),
+                "p_model": p[i][has].astype(np.float32), "p_baseline": store.p_baseline[rows],
+            }))
+    return pl.concat(parts)
+
+
+def _scores(pred):
+    return {"model": score(pred["y"], pred["p_model"]), "baseline": score(pred["y"], pred["p_baseline"])}
 
 
 def compute_metrics(pred):
-    """Events with at least one earlier event of the student, overall and by history length."""
+    """Events with at least one earlier event of the student: overall, by history length,
+    and per (dataset, source) group."""
     pred = pred.filter(pl.col("n_past") >= 1)
-    out = {"model": score(pred["y"], pred["p_model"]), "baseline": score(pred["y"], pred["p_baseline"]),
-           "n_students": pred["user_id"].n_unique(), "by_history": {}}
+    out = {**_scores(pred), "n_students": pred.select("dataset", "user_id").n_unique(), "by_history": {},
+           "by_group": {}}
     for lo, hi in HISTORY_BINS:
-        b = pred.filter(in_bin(pl.col("n_past"), lo, hi))
-        out["by_history"][bin_label(lo, hi)] = {"model": score(b["y"], b["p_model"]),
-                                                "baseline": score(b["y"], b["p_baseline"])}
+        out["by_history"][bin_label(lo, hi)] = _scores(pred.filter(in_bin(pl.col("n_past"), lo, hi)))
+    for (ds, src), g in sorted(pred.group_by("dataset", "source"), key=lambda x: x[0]):
+        out["by_group"][f"{ds}/{src}"] = {**_scores(g), "n_students": g["user_id"].n_unique()}
     return out
 
 
 def print_metrics(m):
     def f(x):
         return "  -  " if x is None else f"{x:.3f}"
-    hdr = (f"{'history':>8} {'n':>8} {'AUC model':>10} {'AUC base':>9} {'logloss model':>14} "
+    hdr = (f"{'events':>26} {'n':>8} {'AUC model':>10} {'AUC base':>9} {'logloss model':>14} "
            f"{'acc1 model':>11} {'acc0 model':>11} {'acc1 base':>10} {'acc0 base':>10}")
     print("\n" + hdr + "\n" + "-" * len(hdr))
-    for name, r in [("all", m)] + list(m["by_history"].items()):
+    rows = [("all", m)] + list(m["by_history"].items())
+    if len(m.get("by_group", {})) > 1:
+        rows += list(m["by_group"].items())
+    for name, r in rows:
         a, b = r["model"], r["baseline"]
-        print(f"{name:>8} {a['n']:>8} {f(a.get('auc')):>10} {f(b.get('auc')):>9} {f(a.get('logloss')):>14} "
+        print(f"{name:>26} {a['n']:>8} {f(a.get('auc')):>10} {f(b.get('auc')):>9} {f(a.get('logloss')):>14} "
               f"{f(a.get('accuracy_1')):>11} {f(a.get('accuracy_0')):>11} "
               f"{f(b.get('accuracy_1')):>10} {f(b.get('accuracy_0')):>10}")
 
@@ -140,29 +152,35 @@ def make_optimizer(model, lr, weight_decay):
                               {"params": other, "weight_decay": 0.0}], lr=lr)
 
 
-def train(store, split, block_cfg, model_cfg, tc, run_dir, device="cuda", attention="flex",
-          max_steps_per_epoch=None, wb=None):
+def train(stores, splits, block_cfg, model_cfg, tc, run_dir, device="cuda", attention="flex",
+          max_steps_per_epoch=None, wb=None, fractions=None):
     """Train, keep the best epoch in run_dir/model.pt, return (model, history)."""
     torch.manual_seed(tc["seed"])
-    sampler = BlockSampler(store, block_cfg, split["train"])
-    runner = Runner(store, block_cfg, device)
-    model = SeqTransformer(model_cfg, store.ex_dim, store.ev_dim, store.res_dim, attention).to(device)
+    sampler = MultiSampler(stores, splits, block_cfg, fractions)
+    for row in sampler.summary():
+        print(f"  {row['group']:32} {row['students']:>7} students | train {row['train']:>7} | "
+              f"targets {row['targets']:>7}")
+    runner = Runner(sampler, block_cfg, device)
+    first = next(iter(stores.values()))
+    model = SeqTransformer(model_cfg, first.ex_dim, first.ev_dim, first.res_dim, attention).to(device)
     print(f"model: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters")
 
-    val_users = sorted(split["val"])
-    if tc["val_max_students"] and len(val_users) > tc["val_max_students"]:
+    val_users = None
+    all_val = sorted((g.dataset, u) for g in sampler.groups for u in splits[g.dataset]["val"] & g.users)
+    if tc["val_max_students"] and len(all_val) > tc["val_max_students"]:
         rng = np.random.default_rng(tc["seed"])
-        val_users = sorted(rng.choice(val_users, tc["val_max_students"], replace=False).tolist())
-    val_blocks = list(sampler.evaluation(val_users))    # fixed: same blocks every epoch
+        val_users = {all_val[i] for i in rng.choice(len(all_val), tc["val_max_students"], replace=False)}
+    val_blocks = list(sampler.evaluation(splits, "val", val_users))    # fixed: same blocks every epoch
+    n_val = len(all_val) if val_users is None else len(val_users)
 
-    steps_per_epoch = -(-len(sampler.targets) // block_cfg.n_targets // tc["batch_size"])
+    steps_per_epoch = -(-sampler.n_targets // block_cfg.n_targets // tc["batch_size"])
     if max_steps_per_epoch:
         steps_per_epoch = min(steps_per_epoch, max_steps_per_epoch)
     total = steps_per_epoch * tc["max_epochs"]
     opt = make_optimizer(model, tc["lr"], tc["weight_decay"])
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: lr_factor(s, tc["warmup_steps"], total))
-    print(f"{len(sampler.targets)} train targets, {steps_per_epoch} steps per epoch, "
-          f"{len(val_users)} val students ({len(val_blocks)} blocks)")
+    print(f"{sampler.n_targets} train targets, {steps_per_epoch} steps per epoch, "
+          f"{n_val} val students ({len(val_blocks)} blocks)")
 
     history, best_auc, bad_epochs, step = [], -1.0, 0, 0
     for epoch in range(tc["max_epochs"]):
@@ -200,7 +218,8 @@ def train(store, split, block_cfg, model_cfg, tc, run_dir, device="cuda", attent
               f"val logloss {val['model'].get('logloss', float('nan')):.4f}", flush=True)
         if wb:
             wb.log({"val/auc": auc, "val/logloss": val["model"].get("logloss"),
-                    "val/auc_baseline": val["baseline"].get("auc"), "epoch": epoch}, step=step)
+                    "val/auc_baseline": val["baseline"].get("auc"), "epoch": epoch,
+                    **{f"val/auc/{k}": v["model"].get("auc") for k, v in val["by_group"].items()}}, step=step)
 
         if auc > best_auc:
             best_auc, bad_epochs = auc, 0
@@ -218,11 +237,12 @@ def train(store, split, block_cfg, model_cfg, tc, run_dir, device="cuda", attent
     return model, history
 
 
-def evaluate(model, store, split, block_cfg, eval_set, batch_size, device):
-    """Predictions for every student of eval_set (targets) with train students as context."""
-    sampler = BlockSampler(store, block_cfg, split["train"])
-    runner = Runner(store, block_cfg, device)
-    pred = predict(model, runner, sampler.evaluation(sorted(split[eval_set])), batch_size, desc=eval_set)
+def evaluate(model, stores, splits, block_cfg, eval_set, batch_size, device, fractions=None):
+    """Predictions for every student of eval_set (targets) with train students of the same
+    group as context."""
+    sampler = MultiSampler(stores, splits, block_cfg, fractions)
+    runner = Runner(sampler, block_cfg, device)
+    pred = predict(model, runner, sampler.evaluation(splits, eval_set), batch_size, desc=eval_set)
     return pred, compute_metrics(pred)
 
 
@@ -286,12 +306,15 @@ def main():
                              "or run without --wandb-project")
 
     t0 = time.time()
-    store = EventStore.load(cfg["events_id"], cfg["exercises_id"], args.datasets_root)
-    split = load_split(cfg["split_id"], args.datasets_root)
-    print(f"{store.n_events} events, {len(store.users)} students, loaded in {time.time() - t0:.0f}s")
+    entries = dataset_entries(cfg)
+    stores, splits, fractions = load_datasets(entries, args.datasets_root)
+    for name, store in stores.items():
+        print(f"{name}: {store.n_events} events, {len(store.users)} students, "
+              f"sources {sorted(set(store.sources))}")
+    print(f"loaded in {time.time() - t0:.0f}s")
 
     run_dir = new_run_dir(args.runs_root, commit)
-    config = {**vars(args), "config_file": cfg, "block": block_cfg.to_dict(), "model": model_cfg.to_dict(),
+    config = {**vars(args), "config_file": cfg, "datasets": [e.to_dict() for e in entries], "block": block_cfg.to_dict(), "model": model_cfg.to_dict(),
               "train": tc, "git_commit": commit, "git_clean": clean, "libraries": library_versions(),
               "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     (run_dir / "config.json").write_text(json.dumps(config, indent=2, default=str))
@@ -302,9 +325,10 @@ def main():
         import wandb
         wb = wandb.init(project=args.wandb_project, job_type=PIPELINE, config=config, name=run_dir.name)
 
-    model, _ = train(store, split, block_cfg, model_cfg, tc, run_dir, args.device, args.attention,
-                     args.max_steps_per_epoch, wb)
-    pred, metrics = evaluate(model, store, split, block_cfg, args.eval_set, tc["batch_size"], args.device)
+    model, _ = train(stores, splits, block_cfg, model_cfg, tc, run_dir, args.device, args.attention,
+                     args.max_steps_per_epoch, wb, fractions)
+    pred, metrics = evaluate(model, stores, splits, block_cfg, args.eval_set, tc["batch_size"], args.device,
+                             fractions)
     pred.write_parquet(run_dir / "predictions.parquet")
     (run_dir / "metrics.json").write_text(json.dumps({"eval_set": args.eval_set, **metrics}, indent=2))
     print(f"\n{args.eval_set}: {metrics['n_students']} students")
@@ -315,6 +339,8 @@ def main():
         wb.summary[f"{args.eval_set}/auc_baseline"] = metrics["baseline"].get("auc")
         wb.summary[f"{args.eval_set}/acc1"] = metrics["model"].get("accuracy_1")
         wb.summary[f"{args.eval_set}/acc0"] = metrics["model"].get("accuracy_0")
+        for k, v in metrics["by_group"].items():
+            wb.summary[f"{args.eval_set}/auc/{k}"] = v["model"].get("auc")
         wb.finish()
 
 
