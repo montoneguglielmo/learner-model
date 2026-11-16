@@ -3,16 +3,16 @@
 
 # Datasets (training/multi.py). Each block comes from one (dataset, source) group; batches mix
 # groups. A source may be selected from one dataset only: V1 am and V2 am are the same students,
-# split separately. Fill in the embedding folder names made by the encoders.
+# split separately.
 datasets:
-  - events_id: event_embed_miaam_v2__YYYY-MM-DD__xxxxxx
-    exercises_id: exercise_embed_miaam_v2__YYYY-MM-DD__xxxxxx
+  - events_id: event_embed_miaam_v2__2026-11-12__6c5069
+    exercises_id: exercise_embed_miaam_v2__2026-11-16__f1d1c7
     split_id: split_students_miaam_v2__2026-11-10__7d163c
     sources: null           # null = all: am, adaptiv_world, adaptiv_college
     source_column: source   # null = the whole dataset is one source
     train_fraction: 1.0     # share of its train students used (val and test stay whole)
-  - events_id: event_embed_miaam_v1__YYYY-MM-DD__xxxxxx
-    exercises_id: exercise_embed_miaam_v1__YYYY-MM-DD__xxxxxx
+  - events_id: event_embed_miaam_v1__2026-11-16__f1d1c7
+    exercises_id: exercise_embed_miaam_v1__2026-11-16__f1d1c7
     split_id: split_students_miaam_v1__2026-11-10__7d163c
     sources: [mia]          # am comes from V2
     source_column: source
