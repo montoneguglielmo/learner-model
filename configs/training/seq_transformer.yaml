@@ -11,7 +11,7 @@ datasets:
     sources: null           # null = all: am, adaptiv_world, adaptiv_college
     source_column: source   # null = the whole dataset is one source
     train_fraction: 1.0     # share of its train students used (val and test stay whole)
-  - events_id: event_embed_miaam_v1__2026-11-16__f1d1c7
+  - events_id: event_embed_miaam_v1__2026-11-16__a6a5f7
     exercises_id: exercise_embed_miaam_v1__2026-11-16__f1d1c7
     split_id: split_students_miaam_v1__2026-11-10__7d163c
     sources: [mia]          # am comes from V2
