@@ -11,7 +11,9 @@ One dataset at a time, from its original events table.
      the "event: text:" part of the dataset config.
   2. Embed each text with a sentence-embedding model (e.g. Qwen3-Embedding).
      Events are done in chunks; inside a chunk, identical texts are embedded once
-     (result texts repeat a lot, so they cost little).
+     (result texts repeat a lot, so they cost little). Each chunk is saved as soon as
+     it is done: a run that stops (crash, closed terminal) continues where it stopped
+     when started again with the same code and settings.
   3. Optionally keep only the first `output_dim` values (Matryoshka), then L2-normalize.
   4. Save the result as a dataset folder, following the dataset rules.
 
@@ -38,6 +40,8 @@ Output:
 """
 
 import argparse
+import json
+import shutil
 import time
 
 import numpy as np
@@ -103,52 +107,80 @@ def main():
         "text": text_cfg.to_dict(),
         "limit": args.limit,
     }
-    out = DatasetWriter(f"{PIPELINE}_{ds.dataset}", config, root=args.root, allow_dirty=args.allow_dirty)
+    out = DatasetWriter(f"{PIPELINE}_{ds.dataset}", config, root=args.root, allow_dirty=args.allow_dirty,
+                        resume=True)
     if out.reuse:
         return
+    parts = out.path / "parts"   # one file per chunk, joined at the end
+    parts.mkdir(exist_ok=True)
+    meta = parts / "chunk_size.json"
+    if meta.exists() and json.loads(meta.read_text()) != args.chunk_size:
+        raise SystemExit(f"This unfinished run used --chunk-size {json.loads(meta.read_text())}: use the same")
+    meta.write_text(json.dumps(args.chunk_size))
 
     model = load_model(m, revision)
     prompt = m.get("prompt") or ""
     full_dim = model.get_embedding_dimension()
     dim = m.get("output_dim") or full_dim
 
-    # Chunks, so that all the embeddings never need to be in memory at once.
-    writer = None
+    # Chunks, so that all the embeddings never need to be in memory at once. Each chunk is
+    # written to parts/ (with its stats) as soon as it is done; done chunks are skipped.
     kinds = [k for k in KINDS if f"{k}_text" in texts.columns]  # no "result" if no result columns
-    n_tokens = {k: [] for k in kinds}
+    n_tokens = {k: np.zeros(0, np.int64) for k in kinds}  # histogram: n_tokens[k][t] = texts of t tokens
     n_unique = {k: 0 for k in kinds}
-    t0 = time.time()
+    starts = list(range(0, texts.height, args.chunk_size))
+    t0, n_done = time.time(), 0
     bar = tqdm(total=texts.height, unit="event", desc="Embedding", smoothing=0.1)
-    for start in range(0, texts.height, args.chunk_size):
-        chunk = texts.slice(start, args.chunk_size)
-        table = chunk.drop([f"{k}_text" for k in kinds])
+    for i, start in enumerate(starts):
+        part, stats_file = parts / f"part_{i:05d}.parquet", parts / f"part_{i:05d}.json"
+        if part.exists() and stats_file.exists():  # done in an earlier run
+            stats = json.loads(stats_file.read_text())
+        else:
+            chunk = texts.slice(start, args.chunk_size)
+            table = chunk.drop([f"{k}_text" for k in kinds])
+            stats = {}
+            for kind in kinds:
+                col = f"{kind}_text"
+                uniq = chunk.select(pl.col(col).unique(maintain_order=True)).with_row_index("k")
+                docs = [prompt + t for t in uniq[col].to_list()]
+                lengths = [len(ids) for ids in model.tokenizer(docs)["input_ids"]]
+                stats[kind] = {"n_unique": len(docs), "tokens": np.bincount(lengths).tolist()}
+                emb = embed(model, docs, m, dim)
+                k = chunk.join(uniq, on=col, how="left", maintain_order="left")["k"].to_numpy()
+                table = table.with_columns(pl.Series(f"{kind}_embedding", emb[k], dtype=pl.Array(pl.Float32, dim)))
+            tmp = part.with_suffix(".tmp")
+            table.write_parquet(tmp)
+            tmp.rename(part)               # a part file is either complete or absent
+            stats_file.write_text(json.dumps(stats))
+            n_done += 1
         for kind in kinds:
-            col = f"{kind}_text"
-            uniq = chunk.select(pl.col(col).unique(maintain_order=True)).with_row_index("k")
-            docs = [prompt + t for t in uniq[col].to_list()]
-            n_tokens[kind].extend(len(ids) for ids in model.tokenizer(docs)["input_ids"])
-            n_unique[kind] += len(docs)
-            emb = embed(model, docs, m, dim)
-            k = chunk.join(uniq, on=col, how="left", maintain_order="left")["k"].to_numpy()
-            table = table.with_columns(pl.Series(f"{kind}_embedding", emb[k], dtype=pl.Array(pl.Float32, dim)))
-        table = table.to_arrow()
+            n_unique[kind] += stats[kind]["n_unique"]
+            h = np.asarray(stats[kind]["tokens"], np.int64)
+            size = max(len(h), len(n_tokens[kind]))
+            n_tokens[kind] = np.pad(n_tokens[kind], (0, size - len(n_tokens[kind]))) + np.pad(h, (0, size - len(h)))
+        bar.update(min(args.chunk_size, texts.height - start))
+    bar.close()
+    seconds = round(time.time() - t0, 1)
+    print(f"{n_done} chunks embedded in this run, {len(starts) - n_done} done before")
+
+    # Join the parts into one file, one part at a time.
+    writer = None
+    for i in range(len(starts)):
+        table = pq.read_table(parts / f"part_{i:05d}.parquet")
         if writer is None:
             writer = pq.ParquetWriter(out.path / "embeddings.parquet", table.schema)
         writer.write_table(table)
-
-        bar.update(chunk.height)
-    bar.close()
     if writer is not None:
         writer.close()
-    seconds = round(time.time() - t0, 1)
+    shutil.rmtree(parts)
     texts.write_parquet(out.path / "texts.parquet")
 
-    n_tokens = {k: np.array(v) for k, v in n_tokens.items()}
-    n_truncated = {k: int((v > m["max_length"]).sum()) for k, v in n_tokens.items()}
+    n_truncated = {k: int(v[m["max_length"] + 1:].sum()) for k, v in n_tokens.items()}
     for kind, n in n_truncated.items():
         if n:
             print(f"WARNING: {n} {kind} texts were longer than max_length={m['max_length']} tokens and were cut")
-    token_stats = {k: {"median": int(np.median(v)), "max": int(v.max())} for k, v in n_tokens.items()}
+    token_stats = {k: {"median": int(np.searchsorted(np.cumsum(v), (v.sum() + 1) / 2)),
+                       "max": int(np.flatnonzero(v).max())} for k, v in n_tokens.items()}
 
     out.finish(
         input_files=[events_path],
