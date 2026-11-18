@@ -16,7 +16,7 @@ and per (dataset, source) group. Early stopping uses the overall val AUC.
 Usage (from the repo root, code committed):
   # quick check that everything runs: 2 short epochs
   uv run python -m learner_model.training.seq_transformer \
-      --config configs/training/seq_transformer.yaml --max-steps-per-epoch 50 --max-epochs 2
+      --config configs/training/seq_transformer.yaml --set train.max_steps_per_epoch=50 --set train.max_epochs=2
 
   # the real run
   uv run python -m learner_model.training.seq_transformer \
@@ -57,7 +57,7 @@ PIPELINE = "seq_transformer"
 
 TRAIN_DEFAULTS = {"batch_size": 16, "lr": 3e-4, "weight_decay": 0.01, "warmup_steps": 1000,
                   "max_epochs": 20, "patience": 5, "grad_clip": 1.0, "log_every": 50,
-                  "val_max_students": None, "seed": 0}
+                  "val_max_students": None, "max_steps_per_epoch": None, "seed": 0}
 
 
 # ---------------------------------------------------------------- prediction and metrics
@@ -153,7 +153,7 @@ def make_optimizer(model, lr, weight_decay):
 
 
 def train(stores, splits, block_cfg, model_cfg, tc, run_dir, device="cuda", attention="flex",
-          max_steps_per_epoch=None, wb=None, fractions=None):
+          wb=None, fractions=None):
     """Train, keep the best epoch in run_dir/model.pt, return (model, history)."""
     torch.manual_seed(tc["seed"])
     sampler = MultiSampler(stores, splits, block_cfg, fractions)
@@ -174,8 +174,8 @@ def train(stores, splits, block_cfg, model_cfg, tc, run_dir, device="cuda", atte
     n_val = len(all_val) if val_users is None else len(val_users)
 
     steps_per_epoch = -(-sampler.n_targets // block_cfg.n_targets // tc["batch_size"])
-    if max_steps_per_epoch:
-        steps_per_epoch = min(steps_per_epoch, max_steps_per_epoch)
+    if tc["max_steps_per_epoch"]:
+        steps_per_epoch = min(steps_per_epoch, tc["max_steps_per_epoch"])
     total = steps_per_epoch * tc["max_epochs"]
     opt = make_optimizer(model, tc["lr"], tc["weight_decay"])
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: lr_factor(s, tc["warmup_steps"], total))
@@ -267,13 +267,28 @@ def new_run_dir(root, commit):
     return path
 
 
-def load_config(path, max_epochs=None):
-    cfg = yaml.safe_load(Path(path).read_text())
+def apply_overrides(cfg, overrides):
+    """Apply "section.key=value" overrides (value read as YAML) to a config dict, in place.
+    E.g. block.max_events=256, model.use_event=false, train.lr=1e-4."""
+    for item in overrides or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise ValueError(f"--set expects key=value, got '{item}'")
+        *parents, last = key.strip().split(".")
+        node = cfg
+        for k in parents:
+            node = node.setdefault(k, {})
+            if not isinstance(node, dict):
+                raise ValueError(f"--set {key}: '{k}' is not a section")
+        node[last] = yaml.safe_load(value)
+    return cfg
+
+
+def load_config(path, overrides=None):
+    cfg = apply_overrides(yaml.safe_load(Path(path).read_text()), overrides)
     block_cfg = BlockConfig(**cfg.get("block", {}))
     model_cfg = ModelConfig(**cfg.get("model", {}))
     tc = {**TRAIN_DEFAULTS, **cfg.get("train", {})}
-    if max_epochs:
-        tc["max_epochs"] = max_epochs
     if model_cfg.max_events < block_cfg.max_events:
         raise ValueError("model.max_events must be >= block.max_events")
     return cfg, block_cfg, model_cfg, tc
@@ -284,8 +299,9 @@ def main():
     p.add_argument("--config", required=True, help="e.g. configs/training/seq_transformer.yaml")
     p.add_argument("--eval-set", default="val", choices=["val", "test"],
                    help="final evaluation; compare settings on val, keep test for the end")
-    p.add_argument("--max-epochs", type=int, default=None, help="override train.max_epochs (quick checks)")
-    p.add_argument("--max-steps-per-epoch", type=int, default=None, help="quick checks only")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                   help="override a config value, e.g. --set block.n_context=24 --set model.use_event=false "
+                        "(repeatable; recorded in config.json)")
     p.add_argument("--device", default="cuda")
     p.add_argument("--attention", default="flex", choices=["flex", "dense"])
     p.add_argument("--datasets-root", default="datasets")
@@ -297,7 +313,7 @@ def main():
     commit, clean = git_info()
     if not clean and not args.allow_dirty:
         raise SystemExit("Uncommitted changes: commit first (or use --allow-dirty for a test).")
-    cfg, block_cfg, model_cfg, tc = load_config(args.config, args.max_epochs)
+    cfg, block_cfg, model_cfg, tc = load_config(args.config, args.set)
     if args.wandb_project:
         try:
             import wandb  # noqa: F401
@@ -326,7 +342,7 @@ def main():
         wb = wandb.init(project=args.wandb_project, job_type=PIPELINE, config=config, name=run_dir.name)
 
     model, _ = train(stores, splits, block_cfg, model_cfg, tc, run_dir, args.device, args.attention,
-                     args.max_steps_per_epoch, wb, fractions)
+                     wb, fractions)
     pred, metrics = evaluate(model, stores, splits, block_cfg, args.eval_set, tc["batch_size"], args.device,
                              fractions)
     pred.write_parquet(run_dir / "predictions.parquet")

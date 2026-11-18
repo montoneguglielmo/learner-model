@@ -55,7 +55,19 @@ students, split separately).
 
 ```
 uv run python -m learner_model.training.seq_transformer --config configs/training/seq_transformer.yaml \
-    --max-steps-per-epoch 50 --max-epochs 2      # quick check
+    --set train.max_steps_per_epoch=50 --set train.max_epochs=2      # quick check
+```
+
+`--set section.key=value` (repeatable, value read as YAML) changes one config value for a run;
+`config.json` and W&B record the result. For sweeps, set `block.eval_last` (e.g. 32) so every
+run scores the same last events of each val student, whatever `block.max_events` is.
+`model.use_event: false` drops the event embedding and the time gap (events keep their order), `model.use_result: false`
+the result embedding (data_correct stays through `correct_vector`).
+
+```
+--set block.max_events=256 --set model.max_events=256 --set block.eval_last=32   # longer history
+--set block.n_context=24 --set block.eval_last=32                                 # more context
+--set model.use_event=false --set block.eval_last=32                              # ablation
 ```
 
 ## Adding a dataset

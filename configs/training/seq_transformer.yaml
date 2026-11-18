@@ -45,4 +45,5 @@ train:
   grad_clip: 1.0
   log_every: 50       # steps between W&B logs (the progress bar updates every step)
   val_max_students: null   # evaluate on a subset of val students each epoch (faster). null = all
+  max_steps_per_epoch: null   # quick checks only (e.g. 50). null = a full epoch
   seed: 0

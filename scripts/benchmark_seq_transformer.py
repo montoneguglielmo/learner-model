@@ -33,9 +33,11 @@ def main():
     p.add_argument("--warmup", type=int, default=5)
     p.add_argument("--steps", type=int, default=20)
     p.add_argument("--datasets-root", default="datasets")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                   help="override a config value, e.g. --set block.max_events=256 --set model.max_events=256")
     args = p.parse_args()
 
-    cfg, block_cfg, model_cfg, tc = load_config(args.config)
+    cfg, block_cfg, model_cfg, tc = load_config(args.config, overrides=args.set)
     stores, splits, fractions = load_datasets(dataset_entries(cfg), args.datasets_root)
     sampler = MultiSampler(stores, splits, block_cfg, fractions)
     runner = Runner(sampler, block_cfg, "cuda")
