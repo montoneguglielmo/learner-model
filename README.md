@@ -55,7 +55,7 @@ students, split separately).
 
 ```
 uv run python -m learner_model.training.seq_transformer --config configs/training/seq_transformer.yaml \
-    --max-steps-per-epoch 50 --max-epochs 2      # quick check
+    --set train.max_steps_per_epoch=50 --set train.max_epochs=2      # quick check
 ```
 
 `--set section.key=value` (repeatable, value read as YAML) changes one config value for a run;
