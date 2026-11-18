@@ -101,8 +101,7 @@ def test_flex_gradients_match_dense_on_gpu(store):
 
 def test_options(store):
     batch = to_tensors(a_batch(store), "cpu")
-    for kw in ({"ex_dim": 8}, {"correct_vector": False}, {"use_event": False}, {"use_time": False},
-               {"use_event": False, "use_time": False}, {"use_result": False}):
+    for kw in ({"ex_dim": 8}, {"correct_vector": False}, {"use_event": False}, {"use_result": False}):
         with torch.no_grad():
             out = make_model(store, "dense", **kw)(batch)
         assert torch.isfinite(out).all()
@@ -133,10 +132,11 @@ def test_train_and_evaluate(store, tmp_path):
 def test_switches_drop_their_input(store):
     """use_event / use_result: the model output no longer depends on that embedding."""
     batch = to_tensors(a_batch(store), "cpu")
-    for kw, key in (({"use_event": False}, "ev"), ({"use_time": False}, "log_dt"),
-                    ({"use_result": False}, "res")):
+    for kw, key in (({"use_event": False}, "ev"), ({"use_result": False}, "res")):
         model = make_model(store, "dense", **kw)
         changed = {**batch, key: torch.randn_like(batch[key].float()).to(batch[key].dtype)}
+        if key == "ev":   # the time gap goes too
+            changed["log_dt"] = torch.randn_like(batch["log_dt"].float()).to(batch["log_dt"].dtype)
         with torch.no_grad():
             assert torch.allclose(model(batch), model(changed))
     with torch.no_grad():   # and with the switch on, it does depend on it
