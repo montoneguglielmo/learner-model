@@ -10,7 +10,7 @@ Token vectors (width d):
   EX    Linear(exercise embedding)   (optionally only its first ex_dim values, L2-normalized again)
         + a learned vector when the exercise has no embedding
   EV    Linear(event embedding) + Linear([log_dt, is_first])  (time since the previous event)
-        (use_event false: the time part only)
+        (use_event false: nothing, only the kind and position embeddings)
   OUT   Linear([result embedding ; data_correct])   (data_correct only if correct_vector;
         use_result false: the result embedding is replaced by zeros)
   + kind embedding (SEP / EX / EV / OUT) + position embedding (event index in the student's window)
@@ -45,7 +45,8 @@ class ModelConfig:
     max_events: int = 64          # size of the position embedding
     ex_dim: int | None = None     # keep only the first ex_dim values of the exercise vector
     correct_vector: bool = True   # data_correct as an extra input of the outcome projection
-    use_event: bool = True        # False: EV token = time gap only (no event embedding)
+    use_event: bool = True        # False: EV token without event embedding and time gap (a
+                                  #   fixed vector; the order stays through the positions)
     use_result: bool = True       # False: OUT token without the result embedding (data_correct
                                   #   stays if correct_vector; data_duration and data_answer go)
 
@@ -117,9 +118,10 @@ class SeqTransformer(nn.Module):
         p_ex = self.proj_ex(ex) + (~b["ex_known"])[..., None] * self.unknown_ex
         log_dt = b["log_dt"].to(dtype)
         time = torch.stack([log_dt.clamp(min=0), (log_dt < 0).to(dtype)], -1)
-        p_ev = self.proj_time(time)
         if self.cfg.use_event:
-            p_ev = p_ev + self.proj_ev(b["ev"].to(dtype))
+            p_ev = self.proj_ev(b["ev"].to(dtype)) + self.proj_time(time)
+        else:   # the same vector for every EV token (its kind embedding)
+            p_ev = torch.zeros(*time.shape[:-1], self.cfg.d, dtype=dtype, device=time.device)
         res = b["res"].to(dtype)
         if not self.cfg.use_result:
             res = torch.zeros_like(res)

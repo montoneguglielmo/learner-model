@@ -135,6 +135,8 @@ def test_switches_drop_their_input(store):
     for kw, key in (({"use_event": False}, "ev"), ({"use_result": False}, "res")):
         model = make_model(store, "dense", **kw)
         changed = {**batch, key: torch.randn_like(batch[key].float()).to(batch[key].dtype)}
+        if key == "ev":   # the time gap goes too
+            changed["log_dt"] = torch.randn_like(batch["log_dt"].float()).to(batch["log_dt"].dtype)
         with torch.no_grad():
             assert torch.allclose(model(batch), model(changed))
     with torch.no_grad():   # and with the switch on, it does depend on it

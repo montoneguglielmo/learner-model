@@ -61,7 +61,7 @@ uv run python -m learner_model.training.seq_transformer --config configs/trainin
 `--set section.key=value` (repeatable, value read as YAML) changes one config value for a run;
 `config.json` and W&B record the result. For sweeps, set `block.eval_last` (e.g. 32) so every
 run scores the same last events of each val student, whatever `block.max_events` is.
-`model.use_event: false` drops the event embedding (the time gap stays), `model.use_result: false`
+`model.use_event: false` drops the event embedding and the time gap (events keep their order), `model.use_result: false`
 the result embedding (data_correct stays through `correct_vector`).
 
 ```
