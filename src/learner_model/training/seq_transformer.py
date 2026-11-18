@@ -267,8 +267,25 @@ def new_run_dir(root, commit):
     return path
 
 
-def load_config(path, max_epochs=None):
-    cfg = yaml.safe_load(Path(path).read_text())
+def apply_overrides(cfg, overrides):
+    """Apply "section.key=value" overrides (value read as YAML) to a config dict, in place.
+    E.g. block.max_events=256, model.use_event=false, train.lr=1e-4."""
+    for item in overrides or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise ValueError(f"--set expects key=value, got '{item}'")
+        *parents, last = key.strip().split(".")
+        node = cfg
+        for k in parents:
+            node = node.setdefault(k, {})
+            if not isinstance(node, dict):
+                raise ValueError(f"--set {key}: '{k}' is not a section")
+        node[last] = yaml.safe_load(value)
+    return cfg
+
+
+def load_config(path, max_epochs=None, overrides=None):
+    cfg = apply_overrides(yaml.safe_load(Path(path).read_text()), overrides)
     block_cfg = BlockConfig(**cfg.get("block", {}))
     model_cfg = ModelConfig(**cfg.get("model", {}))
     tc = {**TRAIN_DEFAULTS, **cfg.get("train", {})}
@@ -285,6 +302,9 @@ def main():
     p.add_argument("--eval-set", default="val", choices=["val", "test"],
                    help="final evaluation; compare settings on val, keep test for the end")
     p.add_argument("--max-epochs", type=int, default=None, help="override train.max_epochs (quick checks)")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                   help="override a config value, e.g. --set block.n_context=24 --set model.use_event=false "
+                        "(repeatable; recorded in config.json)")
     p.add_argument("--max-steps-per-epoch", type=int, default=None, help="quick checks only")
     p.add_argument("--device", default="cuda")
     p.add_argument("--attention", default="flex", choices=["flex", "dense"])
@@ -297,7 +317,7 @@ def main():
     commit, clean = git_info()
     if not clean and not args.allow_dirty:
         raise SystemExit("Uncommitted changes: commit first (or use --allow-dirty for a test).")
-    cfg, block_cfg, model_cfg, tc = load_config(args.config, args.max_epochs)
+    cfg, block_cfg, model_cfg, tc = load_config(args.config, args.max_epochs, args.set)
     if args.wandb_project:
         try:
             import wandb  # noqa: F401

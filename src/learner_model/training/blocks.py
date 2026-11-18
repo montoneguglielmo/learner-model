@@ -58,6 +58,14 @@ class BlockConfig:
     max_events: int = 64   # events kept per student (one window)
     min_events: int = 2    # shorter students are never targets
     seed: int = 0
+    # evaluation only: score just the last eval_last events of each evaluated student (the
+    # rest of its window is still read as history). null = score the whole window. Set it to
+    # the same value in runs with different max_events, so they are scored on the same events.
+    eval_last: int | None = None
+
+    def __post_init__(self):
+        if self.eval_last is not None and not 1 <= self.eval_last <= self.max_events:
+            raise ValueError(f"eval_last must be in [1, max_events={self.max_events}], got {self.eval_last}")
 
     def to_dict(self):
         return asdict(self)
@@ -209,6 +217,7 @@ class StudentWindow:
     first: int     # first event row (absolute row in the store)
     n: int         # number of events
     target: bool
+    skip: int = 0  # the first `skip` events of a target window get no label (history only)
 
 
 class BlockSampler:
@@ -224,7 +233,8 @@ class BlockSampler:
         n_all = int(self.store.length[k])
         n = min(n_all, self.cfg.max_events)
         offset = n_all - n if last else int(rng.integers(0, n_all - n + 1))
-        return StudentWindow(int(k), int(self.store.start[k]) + offset, n, target)
+        skip = max(0, n - self.cfg.eval_last) if last and self.cfg.eval_last else 0
+        return StudentWindow(int(k), int(self.store.start[k]) + offset, n, target, skip)
 
     def _context(self, exclude, rng):
         pool = np.setdiff1d(self.train, exclude, assume_unique=True)
@@ -242,7 +252,8 @@ class BlockSampler:
 
     def evaluation(self, eval_users, seed=None):
         """Evaluation blocks: the given (val or test) students as targets, on their last
-        max_events events; context students from the train set. Same seed = same blocks."""
+        max_events events (labels on the last eval_last of them, if set); context students
+        from the train set. Same seed = same blocks."""
         rng = np.random.default_rng([self.cfg.seed if seed is None else seed, 10**6])
         ks = self.store.students(eval_users)
         ks = ks[self.store.length[ks] >= self.cfg.min_events]
@@ -264,7 +275,8 @@ def build_block(store: EventStore, windows):
       target     True for tokens of target students
       pos        event index inside the student's window (0 .. max_events-1); 0 for SEP
       event      index into the event arrays below; -1 for SEP
-      label      data_correct on the EV tokens of targets, -1 everywhere else
+      label      data_correct on the EV tokens of targets (from event `skip` of the window on),
+                 -1 everywhere else
     Event arrays, length E = sum of n:
       ex, ex_known, ev, res, correct, log_dt
     Plus: user_ids (one per student), rows (store row of each event, for predictions).
@@ -278,6 +290,7 @@ def build_block(store: EventStore, windows):
     target = np.empty(L, bool)
     pos = np.empty(L, np.int16)
     event = np.empty(L, np.int32)
+    labelled = np.empty(L, bool)
     t = e = 0
     for s, w in enumerate(windows):
         m = 1 + 3 * w.n
@@ -286,11 +299,12 @@ def build_block(store: EventStore, windows):
         kind[t + 1:t + m] = np.tile([EX, EV, OUT], w.n)
         pos[t + 1:t + m] = np.repeat(np.arange(w.n), 3)
         event[t + 1:t + m] = np.repeat(np.arange(e, e + w.n), 3)
+        labelled[t:t + m] = w.target & (pos[t:t + m] >= w.skip)
         t, e = t + m, e + w.n
 
     correct = store.correct[rows]
     label = np.full(L, -1, np.int8)
-    is_label = target & (kind == EV)
+    is_label = labelled & (kind == EV)
     label[is_label] = correct[event[is_label]]
 
     ex_row = store.ex_row[rows]
