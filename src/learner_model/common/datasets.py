@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 
 MANIFEST = "manifest.json"
+PENDING = "pending_config.json"  # in an unfinished folder: its config, so a run can resume
 
 
 def file_sha256(path, chunk_size=1 << 20):
@@ -47,7 +48,9 @@ def git_info():
 
 
 class DatasetWriter:
-    def __init__(self, pipeline_name, config, root="datasets", allow_dirty=False):
+    def __init__(self, pipeline_name, config, root="datasets", allow_dirty=False, resume=False):
+        """resume: an unfinished folder (no manifest) of the same code and config is continued
+        (self.resumed = True) instead of refused. Only for stages that can pick up where they stopped."""
         commit, clean = git_info()
         if commit is None:
             raise RuntimeError("Not inside a git repository with at least one commit. "
@@ -60,7 +63,7 @@ class DatasetWriter:
         self.config = config
         self.commit, self.clean = commit, clean
         self.created_at = datetime.datetime.now(datetime.timezone.utc)
-        self.reuse = False
+        self.reuse = self.resumed = False
 
         root = Path(root)
         base = f"{pipeline_name}__{self.created_at:%Y-%m-%d}__{commit[:6]}"
@@ -74,6 +77,12 @@ class DatasetWriter:
             if not path.exists():
                 break
             manifest_path = path / MANIFEST
+            pending = path / PENDING
+            if not manifest_path.exists() and resume and pending.exists() \
+                    and json.loads(pending.read_text()) == json.loads(json.dumps(config)):
+                print(f"Resuming the unfinished dataset {path}")
+                self.resumed = True
+                break
             if not manifest_path.exists():
                 raise RuntimeError(f"{path} has no {MANIFEST}: an earlier run crashed. "
                                    f"Delete this folder and run again.")
@@ -84,11 +93,13 @@ class DatasetWriter:
             n += 1
 
         self.dataset_id, self.path = dataset_id, path
-        if not self.reuse:
+        if not self.reuse and not self.resumed:
             path.mkdir(parents=True)
+            (path / PENDING).write_text(json.dumps(config, indent=2, default=str))
 
     def finish(self, input_files, extra=None):
         """Hash inputs and outputs, then write manifest.json. Call this LAST."""
+        (self.path / PENDING).unlink(missing_ok=True)
         output_files = {
             str(p.relative_to(self.path)): file_sha256(p)
             for p in sorted(self.path.rglob("*")) if p.is_file() and p.name != MANIFEST

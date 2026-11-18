@@ -20,13 +20,13 @@ exercise:
   # "content" JSON. The "text" settings below belong to this format.
   format: miaam
   model:
-    name: Qwen/Qwen3-Embedding-0.6B
+    name: Qwen/Qwen3-Embedding-4B   # few, long texts: the bigger model is cheap here
     revision: main        # resolved to the exact commit hash at run time, saved in the manifest
     dtype: bfloat16
     device: cuda
     max_length: 4096      # tokens; the longest exercise texts are about 1,000-1,500 tokens
-    batch_size: 32
-    output_dim: 1024      # all the values of the 0.6B model
+    batch_size: 16
+    output_dim: null      # keep all 2560 values; model.ex_dim in the training config can use fewer
     prompt: null          # exercises are embedded as documents: no instruction
   text:
     # Columns in no list are not used; scripts/preview_exercise_texts.py prints them ("not used").

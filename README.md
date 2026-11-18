@@ -45,6 +45,19 @@ uv run python -m learner_model.preprocessing.encoders.event_embed    --config co
 Outputs: `split_students_miaam_v2__...`, `exercise_embed_miaam_v2__...`, `event_embed_miaam_v2__...`.
 The training config (`configs/training/seq_transformer.yaml`) takes their three ids.
 
+## Training on several datasets
+
+The training config lists datasets (`datasets:`), each with its three ids, the `sources` to use
+(`null` = all), `source_column` and `train_fraction`. Each block comes from one (dataset, source)
+group; batches mix groups. Metrics are reported overall and per group; early stopping uses the
+overall val AUC. A source can be selected from one dataset only (V1 am and V2 am are the same
+students, split separately).
+
+```
+uv run python -m learner_model.training.seq_transformer --config configs/training/seq_transformer.yaml \
+    --max-steps-per-epoch 50 --max-epochs 2      # quick check
+```
+
 ## Adding a dataset
 
 1. Make sure it has an exercise table and an events table with: a student id, a timestamp,
