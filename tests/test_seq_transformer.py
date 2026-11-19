@@ -186,3 +186,27 @@ def test_eval_last(store):
     windows = next(BlockSampler(store, cfg, users).epoch(0))
     b = build_block(store, windows)
     assert (b["label"] >= 0).sum() == sum(w.n for w in windows if w.target)
+
+
+def test_evaluate_run_from_saved_model(store, tmp_path):
+    """evaluate_run reloads model.pt and gives the same metrics as evaluating the trained model."""
+    import json
+
+    from learner_model.training.evaluate_run import evaluate_run
+    from learner_model.training.multi import DatasetEntry
+
+    users = store.users
+    split = {"train": set(users[:28]), "val": set(users[28:34]), "test": set(users[34:])}
+    stores, splits = {store.name: store}, {store.name: split}
+    tc = {**TRAIN_DEFAULTS, "batch_size": 4, "warmup_steps": 2, "max_epochs": 1}
+    model, _ = train(stores, splits, BLOCK, MODEL, tc, tmp_path, device="cpu", attention="dense")
+    _, expected = evaluate(model, stores, splits, BLOCK, "test", 4, "cpu")
+
+    entries = [DatasetEntry("ev", "ex", "split")]
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"datasets": [e.to_dict() for e in entries], "block": BLOCK.to_dict(), "train": tc}))
+    cache = {json.dumps([e.to_dict() for e in entries], sort_keys=True): (stores, splits, None)}
+    got = evaluate_run(tmp_path, "test", device="cpu", attention="dense", cache=cache)
+    assert got["model"]["auc"] == pytest.approx(expected["model"]["auc"])
+    assert got["model"]["n"] == expected["model"]["n"] > 0
+    assert (tmp_path / "metrics_test.json").exists() and (tmp_path / "predictions_test.parquet").exists()
